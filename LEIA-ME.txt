@@ -1,6 +1,6 @@
 ﻿# Onion Flows — pacote local (sandbox) — ultima versao
 
-Versao publicada: 5.3.1
+Versao publicada: 5.3.2
 
 ## Requisitos
 - Windows 10/11

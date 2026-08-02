@@ -145,6 +145,28 @@ const normalizeSender = (raw) => {
   return 'user';
 };
 
+const extensionSenderMeta = (raw = {}, normalizedSender = 'user') => {
+  const allowedKinds = new Set(['customer', 'self_agent', 'other_agent', 'bot', 'system']);
+  const fallbackKind = normalizedSender === 'user'
+    ? 'customer'
+    : normalizedSender === 'bot'
+      ? 'bot'
+      : normalizedSender === 'system'
+        ? 'system'
+        : 'self_agent';
+  const requestedKind = pickString(raw.senderKind, raw.sender_kind).toLowerCase();
+  const senderKind = allowedKinds.has(requestedKind) ? requestedKind : fallbackKind;
+  const participantId = pickString(raw.senderParticipantId, raw.participantId);
+  const userId = pickString(raw.senderUserId, raw.userId);
+  return {
+    senderKind,
+    senderPurpose: pickString(raw.senderPurpose, raw.purpose).toLowerCase().slice(0, 40),
+    senderParticipantId: GENESYS_UUID_RE.test(participantId) ? participantId : null,
+    senderName: pickString(raw.senderName, raw.participantName).replace(/\s+/g, ' ').slice(0, 200) || null,
+    senderUserId: GENESYS_UUID_RE.test(userId) ? userId : null,
+  };
+};
+
 const toIsoFromTs = (ts, fallback = null) => {
   if (ts === undefined || ts === null || ts === '') {
     return fallback || new Date().toISOString();
@@ -608,6 +630,10 @@ export const handleExtBackfill = async (socket, payload = {}) => {
         mediaRaw = entry.media || entry.attachment || null;
       }
       const sourceMessageId = String(messageId || '');
+      const senderMeta = extensionSenderMeta(
+        typeof entry === 'object' && entry ? entry : {},
+        sender
+      );
 
       const media = await normalizeExtensionMedia(mediaRaw, liveChat.tenantId || tenantId);
       if (!text && media) {
@@ -632,6 +658,7 @@ export const handleExtBackfill = async (socket, payload = {}) => {
           source: 'genesys',
           genesysMessageId: mid,
           genesysConvId: convId,
+          ...senderMeta,
           ...(media?.mediaId ? { genesysMediaId: media.mediaId } : {})
         }
       }, { incrementUnread: sender === 'user' });
@@ -645,6 +672,22 @@ export const handleExtBackfill = async (socket, payload = {}) => {
           message: result.message
         });
       } else {
+        // Um snapshot autoritativo também corrige a autoria de mensagens já
+        // armazenadas (por exemplo, histórico que antes aparecia como "Você").
+        await adapter.updateOne(
+          'chatMessages',
+          { chatId: liveChat.id, messageId: mid },
+          {
+            $set: {
+              sender,
+              'meta.senderKind': senderMeta.senderKind,
+              'meta.senderPurpose': senderMeta.senderPurpose,
+              'meta.senderParticipantId': senderMeta.senderParticipantId,
+              'meta.senderName': senderMeta.senderName,
+              'meta.senderUserId': senderMeta.senderUserId,
+            }
+          }
+        ).catch(() => {});
         if (media?.url) {
           const existing = await adapter.findOne(
             'chatMessages',
@@ -755,6 +798,7 @@ export const handleExtMensagem = async (socket, payload = {}) => {
   if (!text) return { ok: false, error: 'mensagem.text ou media obrigatorio' };
 
   const sender = normalizeSender(rawMsg?.sender || rawMsg?.from || payload.sender);
+  const senderMeta = extensionSenderMeta(rawMsg, sender);
   const timestamp = toIsoFromTs(rawMsg?.ts ?? rawMsg?.timestamp ?? payload.ts);
 
   // Msg de AGENTE com id DOM = bolha residual de outro chat na tela Genesys.
@@ -805,6 +849,7 @@ export const handleExtMensagem = async (socket, payload = {}) => {
         source: 'genesys',
         genesysMessageId: rawGenesysId,
         genesysConvId: convId,
+        ...senderMeta,
         ...(media?.mediaId ? { genesysMediaId: media.mediaId } : {})
       }
     }, { incrementUnread: sender === 'user' });

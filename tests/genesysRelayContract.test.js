@@ -49,3 +49,12 @@ test('mídia Genesys aceita data URL com parâmetros e normaliza OGG', async () 
   assert.match(relay, /hasTemporaryGenesysUrl/);
   assert.match(relay, /media,\s*\n\s*updatedAt/);
 });
+
+test('snapshot Genesys preserva bot, agente atual e agente anterior', async () => {
+  const relay = await loadRelaySource();
+  assert.match(relay, /const extensionSenderMeta/);
+  assert.match(relay, /'self_agent', 'other_agent', 'bot', 'system'/);
+  assert.match(relay, /'meta\.senderParticipantId'/);
+  assert.match(relay, /'meta\.senderName'/);
+  assert.match(relay, /Um snapshot autoritativo também corrige a autoria/);
+});
