@@ -1,6 +1,6 @@
-﻿# Onion Flows — pacote local (sandbox) — ultima versao
+# Onion Flows — pacote local (sandbox) — ultima versao
 
-Versao publicada: 5.3.2
+Versao publicada: 5.3.6
 
 ## Requisitos
 - Windows 10/11
@@ -8,17 +8,17 @@ Versao publicada: 5.3.2
 - Portas livres: 3101 (API) e 30999 (frontend)
 
 ## Como rodar
-1. Extraia este zip
-2. START.bat
-3. Abra http://localhost:30999
+1. Extraia este zip ou clone o repositorio
+2. Execute START.bat; a configuracao local sera criada e validada automaticamente
+3. Abra http://127.0.0.1:30999
 
 ## Logins
 - Super admin: admin / sandbox123
 - Agente: agent / sandbox123
 
 ## URLs
-- Frontend: http://localhost:30999
-- API: http://localhost:3101
+- Frontend: http://127.0.0.1:30999
+- API: http://127.0.0.1:3101
 - Seed: POST /api/load-test/seed-client
 
 ## Genesys (fases 1-4)

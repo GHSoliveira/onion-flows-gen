@@ -24,6 +24,18 @@ if errorlevel 1 (
 )
 
 for /f "tokens=*" %%v in ('node -v') do echo Node: %%v
+set "NODE_MAJOR="
+for /f "tokens=*" %%v in ('node -p "parseInt(process.versions.node)"') do set "NODE_MAJOR=%%v"
+if not defined NODE_MAJOR (
+  echo [ERRO] Nao foi possivel identificar a versao do Node.js.
+  pause
+  exit /b 1
+)
+if %NODE_MAJOR% LSS 20 (
+  echo [ERRO] Node.js 20+ obrigatorio. Versao encontrada: %NODE_MAJOR%.
+  pause
+  exit /b 1
+)
 for /f "tokens=*" %%v in ('npm -v') do echo npm:  %%v
 echo.
 
@@ -32,6 +44,15 @@ if not exist "package.json" (
   pause
   exit /b 1
 )
+
+echo [CONFIG] Validando configuracao local...
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\ensure-sandbox-env.ps1"
+if errorlevel 1 (
+  echo [ERRO] Nao foi possivel preparar o arquivo .env.sandbox.
+  pause
+  exit /b 1
+)
+echo.
 
 if not exist "node_modules\" (
   echo [1/3] Instalando dependencias do backend...
@@ -60,20 +81,22 @@ if not exist "client\node_modules\" (
   echo [2/3] Frontend ja instalado.
 )
 
-echo [3/3] Subindo sandbox...
+echo [3/3] Subindo e verificando sandbox...
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start-sandbox.ps1"
 if errorlevel 1 (
-  echo [ERRO] Falha ao iniciar sandbox. Veja sandbox\logs\
+  echo.
+  echo [ERRO] O sandbox nao iniciou. O diagnostico foi mostrado acima.
+  echo Logs completos: %~dp0sandbox\logs\
   pause
   exit /b 1
 )
 
 echo.
 echo ============================================
-echo  Pronto!
-echo  Frontend: http://localhost:30999
-echo  API:      http://localhost:3101
-echo  Health:   http://localhost:3101/health
+echo  Pronto - servicos verificados!
+echo  Frontend: http://127.0.0.1:30999
+echo  API:      http://127.0.0.1:3101
+echo  Health:   http://127.0.0.1:3101/health
 echo.
 echo  Login: admin / sandbox123  (super-admin)
 echo         agent / sandbox123  (agente)

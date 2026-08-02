@@ -3,6 +3,7 @@ dist/
 .env
 .env.*
 !/.env.example
+!/.env.sandbox.example
 logs/
 *.log
 *.pid

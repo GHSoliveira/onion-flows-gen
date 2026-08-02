@@ -5,5 +5,10 @@ $Root = Resolve-Path (Join-Path $PSScriptRoot '..')
 
 Set-Location -LiteralPath $Root
 
-node scripts/seed-sandbox-json.js
-npm start
+& node scripts/seed-sandbox-json.js
+if ($LASTEXITCODE -ne 0) {
+  throw "Seed sandbox falhou com codigo $LASTEXITCODE"
+}
+
+& npm.cmd start
+exit $LASTEXITCODE
