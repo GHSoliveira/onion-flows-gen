@@ -32,6 +32,17 @@ test('upsert persiste a geração informada pela extensão', async () => {
   assert.match(relay, /chat\.genesysSyncGeneration = syncGeneration/);
 });
 
+test('upsert preserva dados primarios recebidos do Genesys sem fingir consulta IXC', async () => {
+  const relay = await loadRelaySource();
+  assert.match(relay, /vars\.cidade = cidade/);
+  assert.match(relay, /vars\.pppoe = pppoe/);
+  assert.match(relay, /vars\.contrato_id = contratoId/);
+  assert.match(relay, /vars\.olt = olt/);
+  assert.match(relay, /vars\.pon_id = ponId/);
+  assert.match(relay, /vars\.fonte_dados_primarios = fonteDadosPrimarios/);
+  assert.doesNotMatch(relay, /vars\.ixc_dados\s*=\s*\{[^}]*fonteDadosPrimarios/s);
+});
+
 test('falha de envio marca delivery e alerta o agente', async () => {
   const relay = await loadRelaySource();
   assert.match(relay, /deliveryStatus:\s*'failed'/);

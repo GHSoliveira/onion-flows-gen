@@ -215,6 +215,13 @@ const buildClienteVars = (cliente = {}) => {
   const telefone = onlyDigits(pickString(cliente.telefone, cliente.phone, cliente.whatsapp, cliente.celular));
   const ativo = cliente.ativo === undefined ? null : Boolean(cliente.ativo);
   const filial = pickString(cliente.filial, cliente.branch, cliente.filialId);
+  const cidade = pickString(cliente.cidade, cliente.city, cliente.municipio);
+  const pppoe = pickString(cliente.pppoe, cliente.loginPppoe, cliente.login_pppoe);
+  const ip = pickString(cliente.ip, cliente.ipv4, cliente.ipAddress);
+  const contratoId = pickString(cliente.contratoId, cliente.contractId, cliente.idContrato, cliente.id_contrato);
+  const olt = pickString(cliente.olt, cliente.oltName);
+  const ponId = pickString(cliente.ponId, cliente.pon, cliente.ponLink, cliente.pon_link);
+  const fonteDadosPrimarios = pickString(cliente.fonteDadosPrimarios, cliente.dataSource);
 
   const vars = {};
   if (nomeIxc) vars.nome_cliente = nomeIxc;
@@ -223,6 +230,13 @@ const buildClienteVars = (cliente = {}) => {
   if (telefone) vars.telefone = telefone;
   if (ativo !== null) vars.ativo = ativo ? 'sim' : 'nao';
   if (filial) vars.filial = filial;
+  if (cidade) vars.cidade = cidade;
+  if (pppoe) vars.pppoe = pppoe;
+  if (ip) vars.ip = ip;
+  if (contratoId) vars.contrato_id = contratoId;
+  if (olt) vars.olt = olt;
+  if (ponId) vars.pon_id = ponId;
+  if (fonteDadosPrimarios) vars.fonte_dados_primarios = fonteDadosPrimarios;
   if (cliente.ixcData && typeof cliente.ixcData === 'object' && !Array.isArray(cliente.ixcData)) {
     try {
       const serialized = JSON.stringify(cliente.ixcData);
@@ -231,7 +245,23 @@ const buildClienteVars = (cliente = {}) => {
       // Payload IXC inválido não impede a atualização dos campos básicos.
     }
   }
-  return { vars, nomeIxc, nomeWhatsapp, cpf, endereco, telefone, ativo, filial };
+  return {
+    vars,
+    nomeIxc,
+    nomeWhatsapp,
+    cpf,
+    endereco,
+    telefone,
+    ativo,
+    filial,
+    cidade,
+    pppoe,
+    ip,
+    contratoId,
+    olt,
+    ponId,
+    fonteDadosPrimarios
+  };
 };
 
 /**

@@ -3741,7 +3741,37 @@ const AgentWorkspace = () => {
     )
     : null;
   const selectedHeaderIxc = selectedChat?.ixcData || chatVars?.ixc_dados || null;
-  const selectedHeaderLogins = activeIxcLogins(selectedHeaderIxc);
+  const selectedHeaderGenesys = {
+    legalName: String(chatVars?.nome_cliente || '').trim(),
+    address: String(chatVars?.endereco || '').trim(),
+    city: String(chatVars?.cidade || '').trim(),
+    pppoe: String(chatVars?.pppoe || '').trim(),
+    ip: String(chatVars?.ip || '').trim(),
+    contractId: String(chatVars?.contrato_id || '').trim(),
+    olt: String(chatVars?.olt || '').trim(),
+    ponId: String(chatVars?.pon_id || '').trim(),
+    branch: String(chatVars?.filial || '').trim(),
+    source: String(chatVars?.fonte_dados_primarios || '').trim(),
+  };
+  const selectedHeaderHasGenesysData = Object.entries(selectedHeaderGenesys)
+    .some(([key, value]) => key !== 'source' && Boolean(value));
+  const selectedHeaderGenesysLogin = [selectedHeaderGenesys.pppoe, selectedHeaderGenesys.ip, selectedHeaderGenesys.olt, selectedHeaderGenesys.ponId].some(Boolean)
+    ? [{
+      loginId: `genesys_${selectedChat?.genesysConvId || selectedChat?.id || 'conversation'}`,
+      pppoeUser: selectedHeaderGenesys.pppoe,
+      ipv4: selectedHeaderGenesys.ip,
+      oltName: selectedHeaderGenesys.olt,
+      ponId: selectedHeaderGenesys.ponId,
+      fullAddress: [selectedHeaderGenesys.address, selectedHeaderGenesys.city].filter(Boolean).join(' · '),
+      active: true,
+      online: null,
+      source: 'genesys',
+    }]
+    : [];
+  const selectedHeaderLogins = selectedHeaderIxc
+    ? activeIxcLogins(selectedHeaderIxc)
+    : selectedHeaderGenesysLogin;
+  const selectedHeaderHasData = Boolean(selectedHeaderIxc || selectedHeaderHasGenesysData);
   const routerIxcReady = Boolean(selectedHeaderIxc && Array.isArray(selectedHeaderIxc?.logins));
   const routerHasOnlineLogin = selectedHeaderLogins.some((login) => login?.online === true);
   const routerBlockedTitle = !routerIxcReady
@@ -3753,7 +3783,7 @@ const AgentWorkspace = () => {
     || selectedHeaderLogins.find((login) => login?.active)
     || selectedHeaderLogins[0]
     || null;
-  const selectedHeaderOnline = selectedHeaderLogin?.online === true;
+  const selectedHeaderOnline = Boolean(selectedHeaderIxc && selectedHeaderLogin?.online === true);
   const selectedHeaderAccessTone = !selectedHeaderIxc
     ? 'unknown'
     : selectedHeaderOnline
@@ -3763,8 +3793,15 @@ const AgentWorkspace = () => {
     selectedHeaderIxc?.street,
     selectedHeaderIxc?.houseNumber,
     selectedHeaderIxc?.neighborhood,
-  ].filter(Boolean).join(', ');
-  const selectedHeaderCity = [selectedHeaderIxc?.city, selectedHeaderIxc?.state].filter(Boolean).join(' / ');
+  ].filter(Boolean).join(', ') || selectedHeaderGenesys.address;
+  const selectedHeaderCity = [selectedHeaderIxc?.city, selectedHeaderIxc?.state].filter(Boolean).join(' / ')
+    || selectedHeaderGenesys.city;
+  const selectedHeaderContractId = String(selectedHeaderIxc?.contractId || selectedHeaderGenesys.contractId || '').trim();
+  const selectedHeaderBranch = String(selectedHeaderIxc?.branch || selectedHeaderIxc?.branchId || selectedHeaderGenesys.branch || '').trim();
+  const selectedHeaderLegalName = selectedHeaderGenesys.legalName
+    && selectedHeaderGenesys.legalName.toLocaleLowerCase('pt-BR') !== String(selectedChatName || '').trim().toLocaleLowerCase('pt-BR')
+    ? selectedHeaderGenesys.legalName
+    : '';
   const selectedHeaderPppoe = String(
     selectedHeaderLogin?.pppoeUser
     || selectedHeaderLogin?.login
@@ -4021,16 +4058,16 @@ const AgentWorkspace = () => {
                           </span>
                         </div>
 
-                        {selectedHeaderIxc ? (
+                        {selectedHeaderHasData ? (
                           <>
                             <div className="max-h-48 space-y-1.5 overflow-y-auto p-2 custom-scrollbar">
                               {selectedHeaderLogins.length ? selectedHeaderLogins.map((login, index) => {
-                                const loginName = String(login?.pppoeUser || login?.login || login?.username || `Login ${index + 1}`).trim();
+                                const loginName = String(login?.pppoeUser || login?.login || login?.username || (login?.source === 'genesys' ? 'Dados Genesys' : `Login ${index + 1}`)).trim();
                                 const loginIp = String(login?.ipv4 || login?.ip || login?.ipAddress || '').trim();
                                 const loginOlt = String(login?.oltName || '').trim();
                                 const loginPon = String(login?.ponId || [login?.oltBoard, login?.oltPort].filter(Boolean).join('/') || '').trim();
                                 const loginStreet = [login?.street, login?.houseNumber].filter(Boolean).join(', ');
-                                const loginAddress = [
+                                const loginAddress = String(login?.fullAddress || '').trim() || [
                                   loginStreet,
                                   login?.neighborhood,
                                   login?.city,
@@ -4039,12 +4076,13 @@ const AgentWorkspace = () => {
                                   login?.complement,
                                 ].filter((value) => String(value || '').trim()).join(' · ');
                                 const loginOnline = login?.online === true;
+                                const loginOffline = login?.online === false;
                                 return (
                                   <div key={`${login?.loginId || loginName}-${index}`} className="rounded-xl border border-slate-100 bg-slate-50/80 px-2.5 py-2 dark:border-slate-800 dark:bg-slate-800/55">
                                     <div className="flex items-center gap-2">
-                                      <span className={`h-2 w-2 shrink-0 rounded-full ${loginOnline ? 'bg-emerald-500' : 'bg-red-400'}`} />
+                                      <span className={`h-2 w-2 shrink-0 rounded-full ${loginOnline ? 'bg-emerald-500' : loginOffline ? 'bg-red-400' : 'bg-slate-400'}`} />
                                       <button type="button" onClick={() => copyHeaderValue('Login PPPoE', loginName)} className="min-w-0 flex-1 truncate text-left font-mono text-[11px] font-bold text-slate-800 hover:text-blue-600 dark:text-slate-100 dark:hover:text-blue-300" title="Clique para copiar o login">{loginName}</button>
-                                      <span className={`shrink-0 text-[8px] font-bold uppercase ${loginOnline ? 'text-emerald-600 dark:text-emerald-300' : 'text-red-500 dark:text-red-300'}`}>{loginOnline ? 'Online' : 'Offline'}</span>
+                                      <span className={`shrink-0 text-[8px] font-bold uppercase ${loginOnline ? 'text-emerald-600 dark:text-emerald-300' : loginOffline ? 'text-red-500 dark:text-red-300' : 'text-slate-400 dark:text-slate-500'}`}>{loginOnline ? 'Online' : loginOffline ? 'Offline' : 'Genesys'}</span>
                                     </div>
                                     <div className="mt-1.5 grid grid-cols-2 gap-1.5">
                                       <button type="button" disabled={!loginIp} onClick={() => copyHeaderValue('IP', loginIp)} className="truncate rounded-lg bg-white px-2 py-1 text-left font-mono text-[9px] text-slate-600 shadow-sm disabled:text-slate-300 dark:bg-slate-900 dark:text-slate-300 dark:disabled:text-slate-600" title={loginIp ? 'Clique para copiar o IP' : 'IP não informado'}><span className="font-sans font-bold text-slate-400">IP </span>{loginIp || '—'}</button>
@@ -4056,7 +4094,7 @@ const AgentWorkspace = () => {
                                   </div>
                                 );
                               }) : (
-                                <div className="rounded-xl border border-dashed border-slate-200 px-3 py-4 text-center text-[10px] text-slate-400 dark:border-slate-700">Nenhum login retornado pelo IXC.</div>
+                                <div className="rounded-xl border border-dashed border-slate-200 px-3 py-4 text-center text-[10px] text-slate-400 dark:border-slate-700">{selectedHeaderIxc ? 'Nenhum login ativo retornado pelo IXC.' : 'Login não informado pelo Genesys.'}</div>
                               )}
                             </div>
 
@@ -4067,13 +4105,24 @@ const AgentWorkspace = () => {
                                 className="mx-2 mb-2 block w-[calc(100%-16px)] rounded-xl border border-slate-100 px-2.5 py-2 text-left text-[9px] leading-4 text-slate-500 hover:border-blue-100 hover:bg-blue-50/50 hover:text-blue-700 dark:border-slate-800 dark:text-slate-400 dark:hover:border-blue-900 dark:hover:bg-blue-950/20 dark:hover:text-blue-300"
                                 title="Clique para copiar o endereço"
                               >
-                                <span className="font-bold text-slate-700 dark:text-slate-200">Endereço do cadastro </span>
+                                <span className="font-bold text-slate-700 dark:text-slate-200">Endereço {selectedHeaderIxc ? 'do cadastro' : 'informado pelo Genesys'} </span>
                                 {[selectedHeaderAddress, selectedHeaderCity].filter(Boolean).join(' · ')}
                               </button>
                             ) : null}
 
+                            {selectedHeaderLegalName ? (
+                              <button type="button" onClick={() => copyHeaderValue('Titular', selectedHeaderLegalName)} className="mx-2 mb-2 block w-[calc(100%-16px)] truncate rounded-xl border border-slate-100 px-2.5 py-2 text-left text-[9px] text-slate-500 hover:text-blue-600 dark:border-slate-800 dark:text-slate-400 dark:hover:text-blue-300"><span className="font-bold text-slate-700 dark:text-slate-200">Titular </span>{selectedHeaderLegalName}</button>
+                            ) : null}
+
+                            {(selectedHeaderContractId || selectedHeaderBranch) ? (
+                              <div className="mx-2 mb-2 grid grid-cols-2 gap-1.5">
+                                <button type="button" disabled={!selectedHeaderContractId} onClick={() => copyHeaderValue('Contrato', selectedHeaderContractId)} className="truncate rounded-lg border border-slate-100 px-2 py-1.5 text-left text-[9px] text-slate-500 hover:text-blue-600 disabled:text-slate-300 dark:border-slate-800 dark:text-slate-400 dark:hover:text-blue-300 dark:disabled:text-slate-600"><span className="font-bold text-slate-700 dark:text-slate-200">Contrato </span>{selectedHeaderContractId || '—'}</button>
+                                <button type="button" disabled={!selectedHeaderBranch} onClick={() => copyHeaderValue('Filial', selectedHeaderBranch)} className="truncate rounded-lg border border-slate-100 px-2 py-1.5 text-left text-[9px] text-slate-500 hover:text-blue-600 disabled:text-slate-300 dark:border-slate-800 dark:text-slate-400 dark:hover:text-blue-300 dark:disabled:text-slate-600"><span className="font-bold text-slate-700 dark:text-slate-200">Filial </span>{selectedHeaderBranch || '—'}</button>
+                              </div>
+                            ) : null}
+
                             <div className="flex items-center gap-1.5 border-t border-slate-100 p-2 dark:border-slate-800">
-                              <button type="button" onClick={() => { setCustomerAccessPopoverOpen(false); handleBuscarIxc(); }} className="flex-1 rounded-lg bg-slate-900 px-2.5 py-2 text-[9px] font-bold text-white hover:bg-slate-700 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200">Ver dados IXC</button>
+                              <button type="button" onClick={() => { setCustomerAccessPopoverOpen(false); handleBuscarIxc(); }} className="flex-1 rounded-lg bg-slate-900 px-2.5 py-2 text-[9px] font-bold text-white hover:bg-slate-700 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200">{selectedHeaderIxc ? 'Ver dados IXC' : 'Buscar dados IXC'}</button>
                               {selectedHeaderIxc?.clientId ? (
                                 <button type="button" onClick={refreshIxcLogins} disabled={ixcLoginsRefreshing} className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:cursor-wait disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800" title="Atualizar IP e estado dos logins" aria-label="Atualizar IP e estado dos logins">
                                   {ixcLoginsRefreshing ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
@@ -4107,15 +4156,15 @@ const AgentWorkspace = () => {
                         />
                       ) : null}
                     </div>
-                    {selectedHeaderIxc ? (
+                    {selectedHeaderHasData ? (
                       <button
                         type="button"
                         onClick={() => setCustomerAccessPopoverOpen(true)}
                         className="mt-0.5 flex max-w-full items-center gap-1.5 truncate text-left text-[9px] text-slate-500 hover:text-blue-600 dark:text-slate-400 dark:hover:text-blue-300"
                         title="Clique para ver todos os dados de acesso"
                       >
-                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${selectedHeaderOnline ? 'bg-emerald-500' : 'bg-red-500'}`} />
-                        <span className={`shrink-0 font-bold ${selectedHeaderOnline ? 'text-emerald-600 dark:text-emerald-300' : 'text-red-500 dark:text-red-300'}`}>{selectedHeaderOnline ? 'Online' : 'Offline'}</span>
+                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${selectedHeaderAccessTone === 'online' ? 'bg-emerald-500' : selectedHeaderAccessTone === 'offline' ? 'bg-red-500' : 'bg-slate-400'}`} />
+                        <span className={`shrink-0 font-bold ${selectedHeaderAccessTone === 'online' ? 'text-emerald-600 dark:text-emerald-300' : selectedHeaderAccessTone === 'offline' ? 'text-red-500 dark:text-red-300' : 'text-slate-400 dark:text-slate-500'}`}>{selectedHeaderAccessTone === 'online' ? 'Online' : selectedHeaderAccessTone === 'offline' ? 'Offline' : 'Genesys'}</span>
                         {selectedHeaderPppoe ? <span className="truncate font-mono">{selectedHeaderPppoe}</span> : null}
                         {selectedHeaderIp ? <><span className="shrink-0 text-slate-300 dark:text-slate-600">·</span><span className="shrink-0 font-mono">{selectedHeaderIp}</span></> : null}
                         {selectedHeaderLogins.length > 1 ? <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-px text-[8px] font-bold text-slate-500 dark:bg-slate-800 dark:text-slate-300">+{selectedHeaderLogins.length - 1}</span> : null}
