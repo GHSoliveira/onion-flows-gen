@@ -1,0 +1,92 @@
+import { createContext, useState, useContext, useEffect } from 'react';
+import { apiRequest } from '../services/api';
+import { socketService } from '../services/socket';
+
+const AuthContext = createContext();
+const HEARTBEAT_INTERVAL_MS = Number(import.meta.env?.VITE_AUTH_HEARTBEAT_INTERVAL_MS || 60000);
+
+export const AuthProvider = ({ children }) => {
+    const [user, setUser] = useState(() => {
+        const saved = localStorage.getItem('user');
+        try {
+            return saved ? JSON.parse(saved) : null;
+        } catch {
+            return null;
+        }
+    });
+
+    const login = (userData, userToken) => {
+        setUser(userData);
+        localStorage.setItem('user', JSON.stringify(userData));
+        localStorage.setItem('token', userToken);
+    };
+
+    const updateUser = (partial) => {
+        setUser((prev) => {
+            if (!prev) return prev;
+            const next = { ...prev, ...(partial || {}) };
+            localStorage.setItem('user', JSON.stringify(next));
+            return next;
+        });
+    };
+
+    const logout = async () => {
+        try {
+            await apiRequest('/auth/logout', { method: 'POST' });
+        } catch (_) {}
+        socketService.disconnect();
+        setUser(null);
+        localStorage.removeItem('user');
+        localStorage.removeItem('token');
+        localStorage.removeItem('selectedTenant');
+        window.location.href = '/login';
+    };
+
+
+    useEffect(() => {
+        if (!user) return;
+
+        let consecutiveErrors = 0;
+        let isMounted = true;
+        const maxErrors = 3;
+
+        const beat = setInterval(async () => {
+            if (!isMounted) return;
+
+            try {
+                const res = await apiRequest('/auth/heartbeat');
+                if (res && res.ok) {
+                    const data = await res.json();
+                    if (data?.user) {
+                        setUser(data.user);
+                        localStorage.setItem('user', JSON.stringify(data.user));
+                    }
+                }
+                consecutiveErrors = 0;
+            } catch (error) {
+                consecutiveErrors++;
+                if (consecutiveErrors >= maxErrors) {
+                    console.warn('Heartbeat falhou múltiplas vezes, parando tentativas');
+                    clearInterval(beat);
+                }
+            }
+        }, Math.max(HEARTBEAT_INTERVAL_MS, 30000));
+
+        return () => {
+            isMounted = false;
+            clearInterval(beat);
+        };
+    }, [user?.id]);
+
+    return (
+        <AuthContext.Provider value={{ user, login, logout, updateUser }}>
+            {children}
+        </AuthContext.Provider>
+    );
+};
+
+export const useAuth = () => {
+    const context = useContext(AuthContext);
+    if (!context) throw new Error("useAuth deve ser usado dentro de um AuthProvider");
+    return context;
+};

@@ -1,0 +1,751 @@
+@import "tailwindcss"; /* Em v4, usamos import e não @tailwind base/components/utilities */
+
+@theme {
+  --color-primary: #3b82f6;
+  --color-primary-hover: #2563eb;
+  --color-success: #10b981;
+  --color-danger: #ef4444;
+  --color-warning: #f59e0b;
+}
+
+
+/* Configuração para Tailwind 4 reconhecer a classe .dark */
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  color-scheme: light;
+}
+
+/* Quando a classe .dark for aplicada ao <html> */
+.dark {
+  color-scheme: dark;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  @apply bg-gray-50 text-slate-900 transition-colors duration-300;
+}
+
+.dark body {
+  @apply bg-slate-900 text-slate-100;
+}
+
+/* Custom Scrollbar (lista de chats, logs, etc.) */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent; /* slate-300 */
+  color-scheme: light;
+}
+
+.dark .custom-scrollbar {
+  scrollbar-color: #475569 transparent; /* slate-600 */
+  color-scheme: dark;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #cbd5e1; /* slate-300 */
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8; /* slate-400 */
+  background-clip: padding-box;
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #475569; /* slate-600 */
+  background-clip: padding-box;
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #64748b; /* slate-500 */
+  background-clip: padding-box;
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.sidebar-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(59, 130, 246, 0.32) transparent;
+}
+
+.dark .sidebar-scrollbar {
+  scrollbar-color: rgba(96, 165, 250, 0.34) transparent;
+}
+
+.sidebar-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sidebar-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-scrollbar::-webkit-scrollbar-thumb {
+  background:
+    linear-gradient(180deg, rgba(59, 130, 246, 0.18), rgba(14, 165, 233, 0.28));
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.dark .sidebar-scrollbar::-webkit-scrollbar-thumb {
+  background:
+    linear-gradient(180deg, rgba(96, 165, 250, 0.24), rgba(34, 211, 238, 0.22));
+  background-clip: padding-box;
+}
+
+.sidebar-scrollbar:hover::-webkit-scrollbar-thumb {
+  background:
+    linear-gradient(180deg, rgba(59, 130, 246, 0.58), rgba(14, 165, 233, 0.62));
+  background-clip: padding-box;
+}
+
+.dark .sidebar-scrollbar:hover::-webkit-scrollbar-thumb {
+  background:
+    linear-gradient(180deg, rgba(96, 165, 250, 0.58), rgba(34, 211, 238, 0.44));
+  background-clip: padding-box;
+}
+
+/* Lista de cards do agente — reorder fluido (framer-motion) */
+.compact-audio-player {
+  display: flex;
+  width: min(236px, 100%);
+  min-width: 210px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  overflow: hidden;
+  color: inherit;
+  background: rgb(15 23 42 / 0.14);
+  border: 1px solid rgb(148 163 184 / 0.16);
+  border-radius: 14px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
+}
+
+.compact-audio-player audio {
+  display: none;
+}
+
+.compact-audio-play,
+.compact-audio-action {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  transition: transform 140ms ease, background-color 140ms ease, opacity 140ms ease;
+}
+
+.compact-audio-play {
+  width: 30px;
+  height: 30px;
+  color: rgb(30 41 59);
+  background: rgb(255 255 255 / 0.92);
+  border-radius: 999px;
+  box-shadow: 0 3px 10px rgb(15 23 42 / 0.16);
+}
+
+.compact-audio-play:hover:not(:disabled) {
+  background: white;
+  transform: scale(1.04);
+}
+
+.compact-audio-play:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.compact-audio-action {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border-radius: 7px;
+  opacity: 0.62;
+}
+
+.compact-audio-action:hover {
+  background: rgb(148 163 184 / 0.14);
+  opacity: 1;
+}
+
+.compact-audio-range {
+  display: block;
+  width: 100%;
+  height: 12px;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  appearance: none;
+  background: transparent;
+}
+
+.compact-audio-range::-webkit-slider-runnable-track {
+  height: 3px;
+  background:
+    linear-gradient(
+      to right,
+      rgb(96 165 250) 0,
+      rgb(96 165 250) var(--audio-progress),
+      rgb(148 163 184 / 0.3) var(--audio-progress),
+      rgb(148 163 184 / 0.3) 100%
+    );
+  border-radius: 999px;
+}
+
+.compact-audio-range::-webkit-slider-thumb {
+  width: 9px;
+  height: 9px;
+  margin-top: -3px;
+  appearance: none;
+  background: rgb(255 255 255);
+  border: 2px solid rgb(96 165 250);
+  border-radius: 999px;
+  box-shadow: 0 1px 4px rgb(15 23 42 / 0.22);
+}
+
+.compact-audio-range:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.agent-workspace[data-chat-background-mode="solid"] > main > .relative.flex.min-h-0.flex-1.flex-col {
+  background-color: var(--chat-background-color);
+}
+
+.agent-workspace[data-chat-background-mode="image"] > main > .relative.flex.min-h-0.flex-1.flex-col {
+  background-image: var(--chat-background-image);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+}
+
+.agent-workspace[data-chat-background-mode="image"] > main > .relative.flex.min-h-0.flex-1.flex-col > .pointer-events-none.absolute.inset-0 {
+  background: rgb(2 6 23 / var(--chat-background-dim)) !important;
+}
+
+.agent-workspace[data-chat-bubble-theme="custom"] [id^="agentmsg-"].justify-end > .group {
+  color: var(--agent-text-color) !important;
+  background-color: var(--agent-bubble-color) !important;
+}
+
+.agent-workspace[data-chat-bubble-theme="custom"] [id^="agentmsg-"].justify-start > .group:not(.w-full) {
+  color: var(--customer-text-color) !important;
+  background-color: var(--customer-bubble-color) !important;
+}
+
+.agent-workspace[data-chat-bubble-border="enabled"] [id^="agentmsg-"] > .group:not(.w-full) {
+  border-color: var(--bubble-border-color) !important;
+  border-width: 1px !important;
+}
+
+.agent-workspace [id^="agentmsg-"].justify-start .chat-message-sender-name {
+  color: var(--customer-name-color) !important;
+}
+
+.agent-workspace:not([data-chat-background-mode="image"]) > main > .relative.flex.min-h-0.flex-1.flex-col > .pointer-events-none.absolute.inset-0 {
+  background:
+    radial-gradient(circle at top, color-mix(in srgb, var(--chat-ambient-glow-color) var(--chat-ambient-glow-top), transparent), transparent 35%),
+    radial-gradient(circle at bottom, color-mix(in srgb, var(--chat-ambient-glow-color) var(--chat-ambient-glow-bottom), transparent), transparent 30%) !important;
+}
+
+.onion-app-shell input[type="range"],
+.onion-app-shell input[type="checkbox"] {
+  accent-color: var(--theme-accent-color);
+}
+
+.onion-app-shell [class~="bg-blue-600"],
+.onion-app-shell [class~="bg-blue-500"] {
+  background-color: var(--theme-accent-color) !important;
+}
+
+.onion-app-shell [class~="hover:bg-blue-700"]:hover,
+.onion-app-shell [class~="hover:bg-blue-600"]:hover {
+  background-color: color-mix(in srgb, var(--theme-accent-color) 84%, black) !important;
+}
+
+.onion-app-shell [class~="text-blue-700"],
+.onion-app-shell [class~="text-blue-600"],
+.onion-app-shell [class~="text-blue-500"],
+.onion-app-shell [class~="text-blue-400"] {
+  color: var(--theme-accent-color) !important;
+}
+
+.onion-app-shell [class~="hover:text-blue-700"]:hover,
+.onion-app-shell [class~="hover:text-blue-600"]:hover,
+.onion-app-shell [class~="hover:text-blue-400"]:hover,
+.onion-app-shell [class~="hover:text-blue-300"]:hover {
+  color: color-mix(in srgb, var(--theme-accent-color) 82%, black) !important;
+}
+
+.onion-app-shell [class~="border-blue-500"],
+.onion-app-shell [class~="border-blue-400"],
+.onion-app-shell [class~="border-blue-300"],
+.onion-app-shell [class~="border-blue-200"],
+.onion-app-shell [class~="border-blue-200/80"],
+.onion-app-shell [class~="border-blue-100"] {
+  border-color: color-mix(in srgb, var(--theme-accent-color) 58%, transparent) !important;
+}
+
+.onion-app-shell [class~="hover:border-blue-200"]:hover,
+.onion-app-shell [class~="hover:border-blue-100"]:hover {
+  border-color: color-mix(in srgb, var(--theme-accent-color) 68%, transparent) !important;
+}
+
+.onion-app-shell [class~="bg-blue-50"],
+.onion-app-shell [class~="bg-blue-50/35"],
+.onion-app-shell [class~="bg-blue-50/95"],
+.onion-app-shell [class~="bg-blue-100"],
+.onion-app-shell [class~="bg-blue-400/20"] {
+  background-color: color-mix(in srgb, var(--theme-accent-color) 13%, transparent) !important;
+}
+
+.onion-app-shell [class~="hover:bg-blue-100"]:hover,
+.onion-app-shell [class~="hover:bg-blue-50"]:hover,
+.onion-app-shell [class~="hover:bg-blue-50/50"]:hover {
+  background-color: color-mix(in srgb, var(--theme-accent-color) 18%, transparent) !important;
+}
+
+.onion-app-shell [class~="ring-blue-500"],
+.onion-app-shell [class~="ring-blue-100"] {
+  --tw-ring-color: color-mix(in srgb, var(--theme-accent-color) 58%, transparent) !important;
+}
+
+.onion-app-shell [class~="focus:border-blue-400"]:focus,
+.onion-app-shell [class~="focus:border-blue-500"]:focus {
+  border-color: var(--theme-accent-color) !important;
+}
+
+.dark .onion-app-shell [class~="dark:text-blue-300"],
+.dark .onion-app-shell [class~="dark:text-blue-400"],
+.dark .onion-app-shell [class~="dark:text-blue-200"] {
+  color: color-mix(in srgb, var(--theme-accent-color) 62%, white) !important;
+}
+
+.dark .onion-app-shell [class~="dark:border-blue-400"],
+.dark .onion-app-shell [class~="dark:border-blue-700"],
+.dark .onion-app-shell [class~="dark:border-blue-800"],
+.dark .onion-app-shell [class~="dark:border-blue-900/30"],
+.dark .onion-app-shell [class~="dark:border-blue-900/40"],
+.dark .onion-app-shell [class~="dark:border-blue-900/50"],
+.dark .onion-app-shell [class~="dark:border-blue-900/60"] {
+  border-color: color-mix(in srgb, var(--theme-accent-color) 45%, transparent) !important;
+}
+
+.dark .onion-app-shell [class~="dark:bg-blue-900/40"],
+.dark .onion-app-shell [class~="dark:bg-blue-900/30"],
+.dark .onion-app-shell [class~="dark:bg-blue-950/40"],
+.dark .onion-app-shell [class~="dark:bg-blue-950/30"],
+.dark .onion-app-shell [class~="dark:bg-blue-950/15"],
+.dark .onion-app-shell [class~="dark:bg-blue-900/20"] {
+  background-color: color-mix(in srgb, var(--theme-accent-color) 18%, transparent) !important;
+}
+
+.dark .onion-app-shell [class~="dark:ring-blue-950"] {
+  --tw-ring-color: color-mix(in srgb, var(--theme-accent-color) 35%, transparent) !important;
+}
+
+.dark .onion-app-shell [class~="dark:hover:bg-blue-950/20"]:hover,
+.dark .onion-app-shell [class~="dark:hover:bg-blue-950/50"]:hover {
+  background-color: color-mix(in srgb, var(--theme-accent-color) 25%, transparent) !important;
+}
+
+.dark .onion-app-shell [class~="dark:hover:border-blue-900"]:hover,
+.dark .onion-app-shell [class~="dark:hover:border-blue-800"]:hover {
+  border-color: color-mix(in srgb, var(--theme-accent-color) 58%, transparent) !important;
+}
+
+.agent-chat-reorder-group {
+  position: relative;
+}
+
+.agent-chat-card {
+  cursor: pointer;
+  user-select: none;
+  will-change: transform;
+  /* Nao aplicar borda/sombra aqui: o motion deixa estilo residual apos drag */
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.agent-chat-card-dragging,
+.agent-chat-card-dragging * {
+  cursor: grabbing !important;
+  z-index: 50;
+}
+
+.agent-chat-card-dragging > div {
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.22) !important;
+}
+
+.genesys-inactivity-liquid {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+.genesys-inactivity-liquid-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  min-width: 2px;
+  background: hsl(var(--genesys-liquid-hue) 76% 48% / 0.24);
+  transition: width 1s linear, background-color 1s linear;
+}
+
+.genesys-inactivity-liquid-fill::before {
+  position: absolute;
+  top: -3%;
+  right: -3px;
+  width: 6px;
+  height: 106%;
+  content: "";
+  border-radius: 50%;
+  background: hsl(var(--genesys-liquid-hue) 76% 48% / 0.18);
+  animation: genesysLiquidWave 2.8s ease-in-out infinite alternate;
+}
+
+.genesys-inactivity-liquid-fill.is-expired {
+  background: rgb(220 38 38 / 0.3);
+}
+
+@keyframes genesysLiquidWave {
+  from {
+    transform: translate3d(0, -2%, 0);
+  }
+  to {
+    transform: translate3d(1px, 2%, 0);
+  }
+}
+
+.ixc-liquid-screen {
+  isolation: isolate;
+  animation: ixcLiquidSpread 480ms cubic-bezier(0.2, 0.78, 0.24, 1) both;
+}
+
+.ixc-liquid-screen.is-closing {
+  pointer-events: none;
+  animation-name: ixcLiquidCollapse;
+  animation-timing-function: cubic-bezier(0.76, 0, 0.8, 0.22);
+}
+
+.ixc-liquid-screen::before {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  content: "";
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 18% 42%, rgb(6 182 212 / 0.24), transparent 31%),
+    radial-gradient(circle at 70% 58%, rgb(14 165 233 / 0.18), transparent 38%);
+  animation: ixcLiquidTint 650ms ease-out both;
+}
+
+@keyframes ixcLiquidSpread {
+  from {
+    clip-path: circle(0% at 15% 8%);
+  }
+  65% {
+    clip-path: circle(88% at 38% 34%);
+  }
+  to {
+    clip-path: circle(150% at 50% 50%);
+  }
+}
+
+@keyframes ixcLiquidCollapse {
+  from {
+    clip-path: circle(150% at 50% 50%);
+  }
+  35% {
+    clip-path: circle(88% at 38% 34%);
+  }
+  to {
+    clip-path: circle(0% at 15% 8%);
+  }
+}
+
+@keyframes ixcLiquidTint {
+  from {
+    opacity: 1;
+    transform: scale(0.72);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.18);
+  }
+}
+
+.dark .agent-chat-card-dragging > div {
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.45) !important;
+}
+
+.flow-toolbar-scroll {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.flow-toolbar-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.react-flow__node:has(.compact-node:hover) {
+  z-index: 1000 !important;
+}
+
+.react-flow__node.selected:has(.compact-node) {
+  z-index: 900 !important;
+}
+
+.compact-node.node-can-expand:hover {
+  height: var(--node-expanded-height, 96px);
+}
+
+.compact-node:not(:hover) .node-hover-preview {
+  visibility: hidden;
+  pointer-events: none;
+  max-height: 0;
+}
+
+.compact-node:hover .node-hover-preview {
+  visibility: visible;
+  max-height: 420px;
+}
+
+.node-detail-preview:hover .node-detail-tooltip,
+.node-detail-value:hover + .node-detail-tooltip {
+  display: block;
+}
+
+@keyframes uiOverlayFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes uiModalPopIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes uiSheetUpIn {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes uiPanelSlideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes uiPanelSlideInLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes uiCardReveal {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes uiMessageReveal {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes nodeConfigModalReveal {
+  0% {
+    opacity: 0;
+    transform: scale3d(0.12, 0.08, 1);
+  }
+  40% {
+    opacity: 1;
+    transform: scale3d(1, 0.12, 1);
+  }
+  100% {
+    opacity: 1;
+    transform: scale3d(1, 1, 1);
+  }
+}
+
+@keyframes nodeConfigModalContentReveal {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes commercial-edge-dash {
+  to {
+    stroke-dashoffset: -1000;
+  }
+}
+
+.ui-overlay-fade {
+  animation: uiOverlayFadeIn 180ms ease both;
+}
+
+.ui-modal-surface {
+  animation: uiModalPopIn 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  transform-origin: center;
+  will-change: transform, opacity;
+}
+
+.ui-sheet-surface {
+  animation: uiSheetUpIn 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: transform, opacity;
+}
+
+.ui-responsive-modal {
+  animation: uiSheetUpIn 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: transform, opacity;
+}
+
+.ui-mobile-chat-enter {
+  animation: uiPanelSlideInRight 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.ui-mobile-list-enter {
+  animation: uiPanelSlideInLeft 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.ui-card-hover {
+  animation: uiCardReveal 220ms ease both;
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease,
+    border-color 180ms ease,
+    background-color 180ms ease;
+  will-change: transform;
+}
+
+.ui-card-hover:hover {
+  transform: translateY(-2px);
+}
+
+.ui-message-enter {
+  animation: uiMessageReveal 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: transform, opacity;
+}
+
+.node-config-modal-surface {
+  animation: nodeConfigModalReveal 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  transform-origin: center;
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+}
+
+.node-config-modal-surface > * {
+  animation: nodeConfigModalContentReveal 180ms cubic-bezier(0.22, 1, 0.36, 1) 120ms both;
+  will-change: transform, opacity;
+}
+
+@media (min-width: 1024px) {
+  .ui-responsive-modal {
+    animation: uiModalPopIn 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-overlay-fade,
+  .ui-modal-surface,
+  .ui-sheet-surface,
+  .ui-responsive-modal,
+  .ui-mobile-chat-enter,
+  .ui-mobile-list-enter,
+  .ui-card-hover,
+  .ui-message-enter,
+  .node-config-modal-surface,
+  .node-config-modal-surface > * {
+    animation: none !important;
+    transition: none !important;
+    transform: none !important;
+  }
+
+  .genesys-inactivity-liquid-fill::before {
+    animation: none !important;
+  }
+
+  .ixc-liquid-screen,
+  .ixc-liquid-screen::before {
+    animation: none !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .content {
+    padding: 1rem !important;
+  }
+
+  table {
+    display: block;
+    width: 100%;
+    overflow-x: auto;
+  }
+
+  th,
+  td {
+    white-space: nowrap;
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/((?!assets/|Onion_logo_root\\.png|manifest\\.json|sw\\.js).*)",
+      "destination": "/index.html"
+    }
+  ]
+}

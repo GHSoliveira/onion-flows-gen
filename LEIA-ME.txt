@@ -1,0 +1,30 @@
+﻿# Onion Flows — pacote local (sandbox) — ultima versao
+
+## Requisitos
+- Windows 10/11
+- Node.js 20+ (https://nodejs.org) com npm
+- Portas livres: 3101 (API) e 30999 (frontend)
+
+## Como rodar
+1. Extraia este zip
+2. START.bat
+3. Abra http://localhost:30999
+
+## Logins
+- Super admin: admin / sandbox123
+- Agente: agent / sandbox123
+
+## URLs
+- Frontend: http://localhost:30999
+- API: http://localhost:3101
+- Seed: POST /api/load-test/seed-client
+
+## Genesys (fases 1-4)
+- Extensao → app: ext:atendimento:*
+- App → extensao: cmd:enviar_mensagem, cmd:encerrar
+- Ack: cmd:resultado
+- Conectar extensao com auth.client = "genesys-extension"
+Ver: integracao-genesys-onionflows.md
+
+## Parar
+STOP.bat
