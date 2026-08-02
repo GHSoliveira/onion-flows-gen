@@ -1214,8 +1214,21 @@ export const relayAgentMessageToGenesys = async ({
     return { ok: false, relayed: false, reason: 'empty_text' };
   }
 
-  const result = await emitCmdToExtension(targetAgentId, 'cmd:enviar_mensagem', payload);
-  return { ...result, convId, messageId: payload.messageId };
+  const result = await emitCmdToExtensionWithAck(
+    targetAgentId,
+    'cmd:enviar_mensagem',
+    payload,
+    35000
+  );
+  const confirmed = result?.ok === true;
+  return {
+    ...result,
+    confirmed,
+    relayed: confirmed,
+    reason: confirmed ? null : pickString(result?.reason, result?.error, 'genesys_send_failed'),
+    convId,
+    messageId: payload.messageId
+  };
 };
 
 /**
@@ -1279,8 +1292,21 @@ export const relayAgentMediaToGenesys = async ({
     return { ok: false, relayed: false, reason: 'missing_sync_generation' };
   }
 
-  const result = await emitCmdToExtension(targetAgentId, 'cmd:enviar_midia', payload);
-  return { ...result, convId, messageId: payload.messageId };
+  const result = await emitCmdToExtensionWithAck(
+    targetAgentId,
+    'cmd:enviar_midia',
+    payload,
+    125000
+  );
+  const confirmed = result?.ok === true;
+  return {
+    ...result,
+    confirmed,
+    relayed: confirmed,
+    reason: confirmed ? null : pickString(result?.reason, result?.error, 'genesys_media_send_failed'),
+    convId,
+    messageId: payload.messageId
+  };
 };
 
 /**

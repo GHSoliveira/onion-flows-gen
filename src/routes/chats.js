@@ -424,6 +424,70 @@ const appendAndEmitChatMessage = async (chat, message, options = {}) => {
   return appended.message || message;
 };
 
+const settleGenesysRelayDelivery = async ({ chat, message, relay, cmd = 'enviar_mensagem' }) => {
+  if (!chat?.id || !message?.id || !relay || relay.skipped) return null;
+  const confirmed = relay.confirmed === true && relay.ok === true;
+  const failed = relay.relayed === false && !confirmed;
+  if (!confirmed && !failed) return null;
+
+  const deliveryStatus = confirmed ? 'sent' : 'failed';
+  const deliveryStatusAt = new Date().toISOString();
+  const providerMessageId = confirmed
+    ? (relay.genesysMessageId || relay.providerMessageId || null)
+    : null;
+  const error = failed ? (relay.reason || relay.error || 'genesys_send_failed') : null;
+
+  message.deliveryStatus = deliveryStatus;
+  message.deliveryStatusAt = deliveryStatusAt;
+  if (providerMessageId) message.providerMessageId = providerMessageId;
+  message.meta = {
+    ...(message.meta || {}),
+    deliveryStatus,
+    deliveryStatusAt,
+    ...(providerMessageId ? { providerMessageId } : {}),
+    ...(error ? { deliveryErrors: error } : {})
+  };
+
+  await adapter.updateOne(
+    'chatMessages',
+    { chatId: chat.id, messageId: message.id },
+    {
+      $set: {
+        deliveryStatus,
+        deliveryStatusAt,
+        ...(providerMessageId ? { providerMessageId } : {}),
+        'meta.deliveryStatus': deliveryStatus,
+        'meta.deliveryStatusAt': deliveryStatusAt,
+        ...(providerMessageId ? { 'meta.providerMessageId': providerMessageId } : {}),
+        ...(error ? { 'meta.deliveryErrors': error } : {})
+      }
+    }
+  ).catch(() => {});
+
+  const deliveryEvent = {
+    chatId: chat.id,
+    messageId: message.id,
+    providerMessageId,
+    deliveryStatus,
+    deliveryStatusAt,
+    error,
+    source: 'genesys_ack'
+  };
+  const io = getIo();
+  if (io && chat.tenantId) io.to(`tenant:${chat.tenantId}`).emit('message_delivery', deliveryEvent);
+  if (io && chat.agentId) io.to(`agent:${chat.agentId}`).emit('message_delivery', deliveryEvent);
+  if (failed && io && chat.agentId) {
+    io.to(`agent:${chat.agentId}`).emit('genesys_cmd_failed', {
+      cmd,
+      convId: resolveGenesysConvId(chat) || null,
+      chatId: chat.id,
+      messageId: message.id,
+      error
+    });
+  }
+  return deliveryStatus;
+};
+
 const findTelegramSessionForChat = async (chat) => {
   if (!chat || chat.channel !== 'telegram') return null;
 
@@ -798,6 +862,12 @@ router.post('/:id/messages', authenticate, authorize(CHAT_OPERATIONAL_ROLES), re
           agentName: req.user?.name || chat.agentName || null,
           replyTo: replyContext?.replyTo || null
         });
+        await settleGenesysRelayDelivery({
+          chat,
+          message,
+          relay: genesysRelay,
+          cmd: 'enviar_mensagem'
+        });
         if (genesysRelay && genesysRelay.relayed === false && !genesysRelay.skipped) {
           console.warn('[GENESYS] Mensagem salva localmente, mas extensao offline/indisponivel', {
             chatId: chat.id,
@@ -990,50 +1060,12 @@ router.post('/:id/media', authenticate, authorize(CHAT_OPERATIONAL_ROLES), requi
           agentId: req.user?.id || chat.agentId || null,
           agentName: req.user?.name || chat.agentName || null
         });
-
-        if (genesysRelay?.relayed === false && !genesysRelay?.skipped) {
-          const failedAt = new Date().toISOString();
-          const failure = genesysRelay.reason || 'genesys_media_relay_failed';
-          message.deliveryStatus = 'failed';
-          message.deliveryStatusAt = failedAt;
-          message.meta = {
-            ...(message.meta || {}),
-            deliveryStatus: 'failed',
-            deliveryStatusAt: failedAt,
-            deliveryErrors: failure
-          };
-          await adapter.updateOne(
-            'chatMessages',
-            { chatId: chat.id, messageId: message.id },
-            {
-              $set: {
-                deliveryStatus: 'failed',
-                deliveryStatusAt: failedAt,
-                'meta.deliveryStatus': 'failed',
-                'meta.deliveryStatusAt': failedAt,
-                'meta.deliveryErrors': failure
-              }
-            }
-          ).catch(() => {});
-          const io = getIo();
-          if (io && chat.agentId) {
-            io.to(`agent:${chat.agentId}`).emit('message_delivery', {
-              chatId: chat.id,
-              messageId: message.id,
-              deliveryStatus: 'failed',
-              deliveryStatusAt: failedAt,
-              error: failure,
-              source: 'genesys'
-            });
-            io.to(`agent:${chat.agentId}`).emit('genesys_cmd_failed', {
-              cmd: 'enviar_midia',
-              convId: resolveGenesysConvId(chat) || null,
-              chatId: chat.id,
-              messageId: message.id,
-              error: failure
-            });
-          }
-        }
+        await settleGenesysRelayDelivery({
+          chat,
+          message,
+          relay: genesysRelay,
+          cmd: 'enviar_midia'
+        });
       }
 
       res.json({
