@@ -2,7 +2,7 @@
  * Genesys ⇄ OnionFlows — handlers dos eventos da extensão coletora (v1 + fase 4).
  *
  * Extensão → app:  ext:atendimento:*
- * App → extensão:  cmd:enviar_mensagem | cmd:encerrar
+ * App → extensão:  cmd:enviar_mensagem | cmd:enviar_midia | cmd:encerrar
  * Extensão → app:  cmd:resultado (ack opcional)
  */
 import adapter from '../../db/DatabaseAdapter.js';
@@ -1128,6 +1128,71 @@ export const relayAgentMessageToGenesys = async ({
 };
 
 /**
+ * App → extensão: enviar anexo no Genesys usando o upload web autenticado.
+ * O binário não trafega pelo Socket.IO: a extensão baixa o arquivo do
+ * servidor Onion local e o envia diretamente para a URL assinada da Genesys.
+ */
+export const relayAgentMediaToGenesys = async ({
+  chat,
+  message,
+  agentId = null,
+  agentName = null
+} = {}) => {
+  if (!isGenesysChat(chat)) {
+    return { ok: true, skipped: true, reason: 'not_genesys' };
+  }
+  const convId = resolveGenesysConvId(chat);
+  if (!convId) {
+    return { ok: false, relayed: false, reason: 'missing_convId' };
+  }
+  const targetAgentId = agentId || chat.agentId || null;
+  if (!targetAgentId) {
+    return { ok: false, relayed: false, reason: 'missing_agentId' };
+  }
+
+  const media = message?.media && typeof message.media === 'object'
+    ? message.media
+    : {};
+  const mediaUrl = pickString(media.url, media.mediaUrl);
+  const fileName = pickString(media.fileName, media.filename, 'arquivo');
+  const mimeType = pickString(media.mimeType, media.mime, 'application/octet-stream');
+  const contentLengthBytes = Number.parseInt(media.contentLengthBytes, 10);
+  if (!mediaUrl) {
+    return { ok: false, relayed: false, reason: 'missing_media_url' };
+  }
+  if (!Number.isFinite(contentLengthBytes) || contentLengthBytes <= 0) {
+    return { ok: false, relayed: false, reason: 'invalid_media_size' };
+  }
+
+  const payload = {
+    commandId: generateId('gmedia'),
+    convId,
+    communicationId: pickString(chat.genesysCommunicationId) || null,
+    expectedGeneration: pickString(chat.genesysSyncGeneration) || null,
+    chatId: chat.id,
+    messageId: message?.id || message?.messageId || null,
+    mediaUrl,
+    fileName,
+    mimeType,
+    mediaType: pickString(media.type, 'document'),
+    contentLengthBytes,
+    caption: String(media.caption || '').slice(0, 2000),
+    ts: message?.timestamp ? new Date(message.timestamp).getTime() : Date.now(),
+    agentId: targetAgentId,
+    agentName: agentName || chat.agentName || null
+  };
+  payload.createdAt = Date.now();
+  payload.expiresAt = payload.createdAt + (2 * 60 * 1000);
+
+  if (!payload.expectedGeneration) {
+    return { ok: false, relayed: false, reason: 'missing_sync_generation' };
+  }
+
+  const result = await emitCmdToExtension(targetAgentId, 'cmd:enviar_midia', payload);
+  return { ...result, convId, messageId: payload.messageId };
+};
+
+/**
  * App → extensão: hydrate/sync conversa Genesys (histórico 1× ou deltas).
  * Não exige foco da aba no Genesys — só extensão + token + convId.
  */
@@ -1300,7 +1365,11 @@ export const handleCmdResultado = async (socket, payload = {}) => {
     chat = await findChatByConvId({ tenantId, convId });
   }
 
-  if (cmd === 'enviar_mensagem' || cmd === 'enviar' || cmd === 'send_message') {
+  const isSendCommand = [
+    'enviar_mensagem', 'enviar', 'send_message',
+    'enviar_midia', 'enviar_media', 'send_media'
+  ].includes(cmd);
+  if (isSendCommand) {
     if (ok && chat?.id && messageId) {
       const now = new Date().toISOString();
       const deliveryPatch = {
@@ -1347,7 +1416,7 @@ export const handleCmdResultado = async (socket, payload = {}) => {
     }
 
     if (!ok) {
-      console.warn('[EXT_CMD] enviar_mensagem falhou na extensao', {
+      console.warn('[EXT_CMD] comando de envio falhou na extensao', {
         agentId,
         convId,
         messageId,
@@ -1385,7 +1454,9 @@ export const handleCmdResultado = async (socket, payload = {}) => {
           source: 'genesys'
         });
         io.to(`agent:${agentId}`).emit('genesys_cmd_failed', {
-          cmd: 'enviar_mensagem',
+          cmd: ['enviar_midia', 'enviar_media', 'send_media'].includes(cmd)
+            ? 'enviar_midia'
+            : 'enviar_mensagem',
           convId,
           chatId: chat?.id || chatId || null,
           messageId,

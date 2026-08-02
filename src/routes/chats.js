@@ -36,6 +36,7 @@ import {
   isGenesysEmptyShell,
   resolveGenesysConvId,
   relayAgentMessageToGenesys,
+  relayAgentMediaToGenesys,
   relayAgentCloseToGenesys,
   relayBuscarIxc,
   relayRefreshIxcLogins,
@@ -114,6 +115,7 @@ const probeTcpPort = (host, port, timeoutMs = 1600) => new Promise((resolve) => 
 // métricas, mas não atende — pickup/transfer/close/messages/media/vars são
 // exclusivos de quem opera de fato (AGENT/ADMIN) ou de SUPER_ADMIN.
 const CHAT_OPERATIONAL_ROLES = ['ADMIN', 'AGENT', 'SUPER_ADMIN'];
+const GENESYS_MEDIA_MAX_BYTES = 25 * 1024 * 1024;
 
 // --- Input hardening helpers ---
 // Mongo operators ($ne, $gt, $regex…) and dot-notation keys must never reach a
@@ -832,6 +834,7 @@ router.post('/:id/media', authenticate, authorize(CHAT_OPERATIONAL_ROLES), requi
     const mimeType = req.body?.mimeType === null || req.body?.mimeType === undefined
       ? null
       : asIdentifier(req.body.mimeType, { maxLength: 128 });
+    const contentLengthBytes = Number.parseInt(req.body?.contentLengthBytes, 10);
     const replyToMessageId = asIdentifier(req.body?.replyToMessageId);
 
     const normalizedMediaType = ['image', 'video', 'audio', 'document'].includes(mediaType.toLowerCase())
@@ -858,6 +861,31 @@ router.post('/:id/media', authenticate, authorize(CHAT_OPERATIONAL_ROLES), requi
         return;
       }
 
+      if (sender === 'agent' && isGenesysChat(chat)) {
+        const claimedGx = asIdentifier(
+          req.body?.genesysConvId || req.body?.conversationId || '',
+          { maxLength: 80 }
+        );
+        const chatGx = resolveGenesysConvId(chat);
+        if (claimedGx && chatGx && claimedGx !== chatGx) {
+          res.status(409).json({
+            error: 'genesysConvId do card nao confere com o chat — recarregue e selecione o cliente certo',
+            chatId: chat.id,
+            chatGx,
+            claimedGx
+          });
+          return;
+        }
+        if (!Number.isFinite(contentLengthBytes) || contentLengthBytes <= 0) {
+          res.status(400).json({ error: 'Tamanho do anexo Genesys invalido.' });
+          return;
+        }
+        if (contentLengthBytes > GENESYS_MEDIA_MAX_BYTES) {
+          res.status(413).json({ error: 'Anexo Genesys excede o limite de 25 MB.' });
+          return;
+        }
+      }
+
       const replyContext = await buildReplyContext(chat, replyToMessageId);
       const message = {
         id: generateId('msg'),
@@ -868,7 +896,8 @@ router.post('/:id/media', authenticate, authorize(CHAT_OPERATIONAL_ROLES), requi
           url: mediaUrl,
           caption: normalizedCaption,
           fileName: fileName || null,
-          mimeType: mimeType || null
+          mimeType: mimeType || null,
+          contentLengthBytes: Number.isFinite(contentLengthBytes) ? contentLengthBytes : null
         },
         providerMessageId: null,
         deliveryStatus: null,
@@ -929,6 +958,18 @@ router.post('/:id/media', authenticate, authorize(CHAT_OPERATIONAL_ROLES), requi
             }
           }
         }
+
+        if (isGenesysChat(chat)) {
+          message.deliveryStatus = 'pending';
+          message.meta = {
+            ...(message.meta || {}),
+            channel: 'genesys',
+            deliveryStatus: 'pending',
+            source: 'agent_app',
+            genesysConvId: resolveGenesysConvId(chat) || null,
+            customerName: chat.customerName || null
+          };
+        }
       }
 
       await appendAndEmitChatMessage(chat, message, { incrementUnread: sender === 'user' });
@@ -941,7 +982,65 @@ router.post('/:id/media', authenticate, authorize(CHAT_OPERATIONAL_ROLES), requi
         tenantId: chat.tenantId
       }, req.user?.id || 'system');
 
-      res.json(message);
+      let genesysRelay = null;
+      if (sender === 'agent' && isGenesysChat(chat)) {
+        genesysRelay = await relayAgentMediaToGenesys({
+          chat,
+          message,
+          agentId: req.user?.id || chat.agentId || null,
+          agentName: req.user?.name || chat.agentName || null
+        });
+
+        if (genesysRelay?.relayed === false && !genesysRelay?.skipped) {
+          const failedAt = new Date().toISOString();
+          const failure = genesysRelay.reason || 'genesys_media_relay_failed';
+          message.deliveryStatus = 'failed';
+          message.deliveryStatusAt = failedAt;
+          message.meta = {
+            ...(message.meta || {}),
+            deliveryStatus: 'failed',
+            deliveryStatusAt: failedAt,
+            deliveryErrors: failure
+          };
+          await adapter.updateOne(
+            'chatMessages',
+            { chatId: chat.id, messageId: message.id },
+            {
+              $set: {
+                deliveryStatus: 'failed',
+                deliveryStatusAt: failedAt,
+                'meta.deliveryStatus': 'failed',
+                'meta.deliveryStatusAt': failedAt,
+                'meta.deliveryErrors': failure
+              }
+            }
+          ).catch(() => {});
+          const io = getIo();
+          if (io && chat.agentId) {
+            io.to(`agent:${chat.agentId}`).emit('message_delivery', {
+              chatId: chat.id,
+              messageId: message.id,
+              deliveryStatus: 'failed',
+              deliveryStatusAt: failedAt,
+              error: failure,
+              source: 'genesys'
+            });
+            io.to(`agent:${chat.agentId}`).emit('genesys_cmd_failed', {
+              cmd: 'enviar_midia',
+              convId: resolveGenesysConvId(chat) || null,
+              chatId: chat.id,
+              messageId: message.id,
+              error: failure
+            });
+          }
+        }
+      }
+
+      res.json({
+        ...message,
+        genesysConvId: resolveGenesysConvId(chat) || null,
+        ...(genesysRelay ? { genesys: genesysRelay } : {})
+      });
     });
   } catch (error) {
     res.status(500).json({ error: error.message });

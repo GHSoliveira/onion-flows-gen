@@ -1,5 +1,7 @@
 ﻿# Onion Flows — pacote local (sandbox) — ultima versao
 
+Versao publicada: 5.3.1
+
 ## Requisitos
 - Windows 10/11
 - Node.js 20+ (https://nodejs.org) com npm
@@ -21,7 +23,7 @@
 
 ## Genesys (fases 1-4)
 - Extensao → app: ext:atendimento:*
-- App → extensao: cmd:enviar_mensagem, cmd:encerrar
+- App → extensao: cmd:enviar_mensagem, cmd:enviar_midia, cmd:encerrar
 - Ack: cmd:resultado
 - Conectar extensao com auth.client = "genesys-extension"
 Ver: integracao-genesys-onionflows.md

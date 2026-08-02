@@ -1039,7 +1039,7 @@ const AgentWorkspace = () => {
       || message?.meta?.deliveryStatus
       || ''
     ).trim().toLowerCase();
-    return ['sent', 'delivered', 'read', 'failed'].includes(status) ? status : null;
+    return ['pending', 'sent', 'delivered', 'read', 'failed'].includes(status) ? status : null;
   };
 
   const renderMessageDeliveryStatus = (message) => {
@@ -1077,6 +1077,14 @@ const AgentWorkspace = () => {
       return (
         <span className={`${commonClass} ${failedClass}`} title="Falhou">
           <XCircle size={13} strokeWidth={2.2} />
+        </span>
+      );
+    }
+
+    if (status === 'pending') {
+      return (
+        <span className={`${commonClass} ${neutralClass}`} title="Enviando">
+          <Loader2 size={12} className="animate-spin" strokeWidth={2.2} />
         </span>
       );
     }
@@ -1574,14 +1582,14 @@ const AgentWorkspace = () => {
       const providerMessageId = event?.providerMessageId || null;
       if (!chatId || !messageId) return;
       const patch = (msgs) => (Array.isArray(msgs) ? msgs : []).map((m) => {
-        if ((m?.id === messageId || m?.messageId === messageId) && providerMessageId) {
+        if (m?.id === messageId || m?.messageId === messageId) {
           return {
             ...m,
-            providerMessageId,
+            ...(providerMessageId ? { providerMessageId } : {}),
             deliveryStatus: event.deliveryStatus || m.deliveryStatus || 'sent',
             meta: {
               ...(m.meta || {}),
-              providerMessageId,
+              ...(providerMessageId ? { providerMessageId } : {}),
               deliveryStatus: event.deliveryStatus || 'sent'
             }
           };
@@ -1740,7 +1748,7 @@ const AgentWorkspace = () => {
     };
 
     const handleGenesysCommandFailed = (event) => {
-      if (event?.cmd !== 'enviar_mensagem') return;
+      if (!['enviar_mensagem', 'enviar_midia'].includes(event?.cmd)) return;
       const messages = {
         communicationId_nao_disponivel_para_esta_conversa:
           'Não foi possível identificar o canal ativo desta conversa. A mensagem não foi enviada.',
@@ -1756,6 +1764,28 @@ const AgentWorkspace = () => {
           'A extensão ainda não confirmou esta conversa como ativa. Aguarde e tente novamente.',
         geracao_da_conversa_divergente:
           'O card está desatualizado. Aguarde a sincronização antes de enviar novamente.',
+        anexo_maior_que_25mb:
+          'O anexo ultrapassa o limite de 25 MB do Genesys.',
+        tipo_de_anexo_nao_permitido:
+          'Este tipo de arquivo não pode ser enviado pelo Genesys.',
+        origem_de_anexo_onion_invalida:
+          'O arquivo não pertence ao armazenamento local seguro do Onion.',
+        upload_genesys_expirou:
+          'O upload do Genesys expirou. Selecione o arquivo e tente novamente.',
+        outro_anexo_em_envio_nesta_conversa:
+          'Já existe um anexo sendo enviado para este cliente. Aguarde a conclusão.',
+        limite_de_uploads_simultaneos:
+          'Há outros anexos em envio. Aguarde alguns segundos e tente novamente.',
+        limite_de_anexos_atingido:
+          'O limite seguro de anexos por minuto foi atingido. Aguarde e tente novamente.',
+        conversa_mudou_durante_upload:
+          'A conversa mudou durante o upload. O anexo foi descartado por segurança.',
+        communicationId_mudou_durante_upload:
+          'O canal da conversa mudou durante o upload. O anexo não foi publicado.',
+        tamanho_do_anexo_diverge_do_onion:
+          'O arquivo local mudou durante o envio. Selecione-o novamente.',
+        mime_do_anexo_diverge_do_onion:
+          'O conteúdo do arquivo não corresponde ao tipo informado.',
       };
       toast.error(
         messages[event?.error]
@@ -2680,7 +2710,11 @@ const AgentWorkspace = () => {
           mediaUrl: asset.url,
           fileName: asset.originalName || mediaModal.file.name,
           mimeType: asset.mimeType || mediaModal.file.type || '',
+          contentLengthBytes: Number(asset.size || mediaModal.file.size || 0),
           caption: mediaModal.caption || '',
+          ...(isGenesysChatClient(selectedChat)
+            ? { genesysConvId: chatConversationId(selectedChat) }
+            : {}),
           ...(replyToMessageId ? { replyToMessageId } : {})
         })
       });
@@ -2695,6 +2729,9 @@ const AgentWorkspace = () => {
           lastMessageAt: data?.timestamp || prev?.lastMessageAt,
           updatedAt: data?.timestamp || new Date().toISOString()
         }));
+        if (data?.genesys?.relayed === false) {
+          toast.error(data.genesys.reason || 'A extensão do Genesys não recebeu o anexo.');
+        }
         closeMediaModal();
       } else {
         toast.error(data?.error || 'Falha ao enviar midia');
