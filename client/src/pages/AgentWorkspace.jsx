@@ -364,6 +364,33 @@ const parseMessageTimeLoose = (value) => {
   return Number.isFinite(timestamp) ? timestamp : 0;
 };
 
+const DELIVERY_STATUS_PRIORITY = Object.freeze({
+  pending: 0,
+  sent: 1,
+  delivered: 2,
+  read: 3,
+});
+
+// A confirmação Socket pode chegar antes da resposta HTTP. A resposta ainda
+// contém "pending" e não pode rebaixar uma mensagem já confirmada.
+const strongestDeliveryStatus = (previousMessage, incomingMessage) => {
+  const previous = String(
+    previousMessage?.deliveryStatus || previousMessage?.meta?.deliveryStatus || ''
+  ).trim().toLowerCase();
+  const incoming = String(
+    incomingMessage?.deliveryStatus || incomingMessage?.meta?.deliveryStatus || ''
+  ).trim().toLowerCase();
+
+  if (!previous) return incoming || null;
+  if (!incoming) return previous || null;
+  if (incoming === 'failed') return previous === 'pending' ? 'failed' : previous;
+  if (previous === 'failed') return incoming === 'pending' ? 'failed' : incoming;
+
+  return (DELIVERY_STATUS_PRIORITY[incoming] ?? -1) >= (DELIVERY_STATUS_PRIORITY[previous] ?? -1)
+    ? incoming
+    : previous;
+};
+
 /** Duplicata visual comum: msg do app (msg_xxx) + eco Genesys (UUID) com mesmo texto. */
 const messagesLookSame = (a, b) => {
   if (!a || !b) return false;
@@ -402,6 +429,7 @@ const dedupeMessageList = (list) => {
       out.push(message);
     } else {
       const previous = out[idx];
+      const deliveryStatus = strongestDeliveryStatus(previous, message);
       out[idx] = {
         ...previous,
         ...message,
@@ -412,8 +440,13 @@ const dedupeMessageList = (list) => {
           || message.meta?.providerMessageId
           || previous.meta?.providerMessageId
           || null,
+        deliveryStatus,
         meta: previous?.meta || message?.meta
-          ? { ...(previous?.meta || {}), ...(message?.meta || {}) }
+          ? {
+            ...(previous?.meta || {}),
+            ...(message?.meta || {}),
+            ...(deliveryStatus ? { deliveryStatus } : {})
+          }
           : null
       };
     }
@@ -631,6 +664,7 @@ const AgentWorkspace = () => {
         merged.push(message);
       } else {
         const previous = merged[idx];
+        const deliveryStatus = strongestDeliveryStatus(previous, message);
         merged[idx] = {
           ...previous,
           ...message,
@@ -643,8 +677,13 @@ const AgentWorkspace = () => {
             || null,
           media: message?.media ?? previous?.media ?? null,
           attachment: message?.attachment ?? previous?.attachment ?? null,
+          deliveryStatus,
           meta: previous?.meta || message?.meta
-            ? { ...(previous?.meta || {}), ...(message?.meta || {}) }
+            ? {
+              ...(previous?.meta || {}),
+              ...(message?.meta || {}),
+              ...(deliveryStatus ? { deliveryStatus } : {})
+            }
             : null
         };
       }
@@ -882,15 +921,18 @@ const AgentWorkspace = () => {
     if (existingIndex !== -1) {
       return current.map((item, index) => {
         if (index !== existingIndex) return item;
+        const deliveryStatus = strongestDeliveryStatus(item, message);
         return {
           ...item,
           ...message,
           media: message?.media ?? item?.media ?? null,
           attachment: message?.attachment ?? item?.attachment ?? null,
+          deliveryStatus,
           meta: item?.meta || message?.meta
             ? {
               ...(item?.meta || {}),
-              ...(message?.meta || {})
+              ...(message?.meta || {}),
+              ...(deliveryStatus ? { deliveryStatus } : {})
             }
             : null
         };

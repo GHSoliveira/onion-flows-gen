@@ -339,32 +339,64 @@ export const appendChatMessage = async (chatOrId, message = {}, options = {}) =>
   }
 
   const isNew = !existingRow;
+  let deliveryConfirmed = false;
   if (isNew) {
     await adapter.insertOne(COLLECTION, normalized);
-  } else if (providerMessageId && !existingRow.providerMessageId) {
-    // anexa id Genesys na mensagem original do app
+  } else if (providerMessageId) {
+    const existingDeliveryStatus = String(
+      existingRow.deliveryStatus || existingRow.meta?.deliveryStatus || ''
+    ).trim().toLowerCase();
+    const isGenesysAgentConfirmation = metaSource === 'genesys'
+      && senderKey === 'agent'
+      && existingDeliveryStatus === 'pending';
+    const shouldAttachProvider = !existingRow.providerMessageId;
+
+    // O eco autoritativo do Genesys confirma a mensagem mesmo se o ACK Socket
+    // tiver se perdido ou chegado antes da resposta HTTP do painel.
     try {
-      await adapter.updateOne(
-        COLLECTION,
-        { id: existingRow.id },
-        {
-          $set: {
-            providerMessageId: String(providerMessageId),
-            'meta.providerMessageId': String(providerMessageId),
-            'meta.genesysMessageId': String(providerMessageId),
-            updatedAt: new Date().toISOString()
+      if (shouldAttachProvider || isGenesysAgentConfirmation) {
+        const confirmedAt = new Date().toISOString();
+        await adapter.updateOne(
+          COLLECTION,
+          { id: existingRow.id },
+          {
+            $set: {
+              ...(shouldAttachProvider ? {
+                providerMessageId: String(providerMessageId),
+                'meta.providerMessageId': String(providerMessageId),
+                'meta.genesysMessageId': String(providerMessageId),
+              } : {}),
+              ...(isGenesysAgentConfirmation ? {
+                deliveryStatus: 'sent',
+                deliveryStatusAt: confirmedAt,
+                'meta.deliveryStatus': 'sent',
+                'meta.deliveryStatusAt': confirmedAt,
+              } : {}),
+              updatedAt: confirmedAt
+            }
           }
-        }
-      );
-      existingRow = {
-        ...existingRow,
-        providerMessageId: String(providerMessageId),
-        meta: {
-          ...(existingRow.meta || {}),
-          providerMessageId: String(providerMessageId),
-          genesysMessageId: String(providerMessageId)
-        }
-      };
+        );
+        existingRow = {
+          ...existingRow,
+          ...(shouldAttachProvider ? { providerMessageId: String(providerMessageId) } : {}),
+          ...(isGenesysAgentConfirmation ? {
+            deliveryStatus: 'sent',
+            deliveryStatusAt: confirmedAt,
+          } : {}),
+          meta: {
+            ...(existingRow.meta || {}),
+            ...(shouldAttachProvider ? {
+              providerMessageId: String(providerMessageId),
+              genesysMessageId: String(providerMessageId)
+            } : {}),
+            ...(isGenesysAgentConfirmation ? {
+              deliveryStatus: 'sent',
+              deliveryStatusAt: confirmedAt,
+            } : {})
+          }
+        };
+        deliveryConfirmed = isGenesysAgentConfirmation;
+      }
     } catch (_) {}
   }
 
@@ -427,7 +459,8 @@ export const appendChatMessage = async (chatOrId, message = {}, options = {}) =>
       unreadByAgentCount: Number(chat.unreadByAgentCount || 0) + (shouldIncrementUnread ? 1 : 0)
     },
     message: storedLegacy,
-    inserted: isNew
+    inserted: isNew,
+    deliveryConfirmed
   };
 };
 

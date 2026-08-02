@@ -702,6 +702,15 @@ export const handleExtBackfill = async (socket, payload = {}) => {
           message: result.message
         });
       } else {
+        if (result.deliveryConfirmed && result.message?.id) {
+          emitToAgentPanel(liveChat, 'message_delivery', {
+            chatId: liveChat.id,
+            messageId: result.message.id,
+            providerMessageId: result.message.providerMessageId || null,
+            deliveryStatus: 'sent',
+            source: 'genesys_echo'
+          });
+        }
         // Um snapshot autoritativo também corrige a autoria de mensagens já
         // armazenadas (por exemplo, histórico que antes aparecia como "Você").
         await adapter.updateOne(
@@ -902,7 +911,14 @@ export const handleExtMensagem = async (socket, payload = {}) => {
       chatId: chat.id,
       message: result.message
     });
-
+  } else if (result?.deliveryConfirmed && result?.message?.id) {
+    emitToAgentPanel(result.chat || chat, 'message_delivery', {
+      chatId: chat.id,
+      messageId: result.message.id,
+      providerMessageId: result.message.providerMessageId || null,
+      deliveryStatus: 'sent',
+      source: 'genesys_echo'
+    });
   }
 
   return {

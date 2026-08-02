@@ -7,6 +7,16 @@ const loadRelaySource = () => readFile(
   'utf8'
 );
 
+const loadChatMessagesSource = () => readFile(
+  new URL('../src/services/chatMessages.js', import.meta.url),
+  'utf8'
+);
+
+const loadAgentWorkspaceSource = () => readFile(
+  new URL('../client/src/pages/AgentWorkspace.jsx', import.meta.url),
+  'utf8'
+);
+
 test('relay Onion cria comando Genesys curto, único e vinculado à geração', async () => {
   const relay = await loadRelaySource();
   assert.match(relay, /commandId:\s*generateId\('gcmd'\)/);
@@ -49,6 +59,16 @@ test('falha de envio marca delivery e alerta o agente', async () => {
   assert.match(relay, /emit\('genesys_cmd_failed'/);
   assert.match(relay, /emit\('message_delivery'/);
   assert.match(relay, /'enviar_midia',\s*'enviar_media',\s*'send_media'/);
+});
+
+test('confirmação de envio não volta para pending por corrida entre Socket e HTTP', async () => {
+  const messages = await loadChatMessagesSource();
+  const workspace = await loadAgentWorkspaceSource();
+  assert.match(messages, /isGenesysAgentConfirmation/);
+  assert.match(messages, /deliveryConfirmed = isGenesysAgentConfirmation/);
+  assert.match(workspace, /const strongestDeliveryStatus/);
+  assert.match(workspace, /DELIVERY_STATUS_PRIORITY/);
+  assert.match(workspace, /const deliveryStatus = strongestDeliveryStatus\(item, message\)/);
 });
 
 test('mídia Genesys aceita data URL com parâmetros e normaliza OGG', async () => {
