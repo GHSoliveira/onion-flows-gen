@@ -3164,11 +3164,11 @@ const AgentWorkspace = () => {
           cursor: 'grabbing'
         }}
         transition={{ type: 'spring', stiffness: 480, damping: 36, mass: 0.65 }}
-        className={`agent-chat-card mx-2 my-1.5 w-[calc(100%-1rem)] ${isDragging ? 'agent-chat-card-dragging' : ''}`}
+        className={`agent-chat-card mx-1.5 my-1 w-[calc(100%-0.75rem)] ${isDragging ? 'agent-chat-card-dragging' : ''}`}
         style={{ position: 'relative', touchAction: draggable ? 'none' : 'auto', zIndex: isDragging ? 50 : 'auto', cursor: isDragging ? 'grabbing' : 'pointer' }}
       >
         <div
-          className={`ui-card-hover relative overflow-hidden rounded-xl border px-2.5 py-2 text-left transition-[border-color,box-shadow,background-color] duration-200 ${shellClass} ${selectedOutlineClass}`}
+          className={`ui-card-hover relative overflow-hidden rounded-lg border px-1.5 py-1 text-left transition-[border-color,box-shadow,background-color] duration-150 ${shellClass} ${selectedOutlineClass}`}
           data-selected={selected ? 'true' : 'false'}
           data-chat-id={chatId}
         >
@@ -3176,16 +3176,16 @@ const AgentWorkspace = () => {
           <button
             type="button"
             onClick={() => handleChatCardClick(chat)}
-            className={`relative z-10 flex w-full min-w-0 items-center gap-2.5 text-left ${isDragging ? 'cursor-grabbing' : 'cursor-pointer'}`}
+            className={`relative z-10 flex w-full min-w-0 items-center gap-1.5 text-left ${isDragging ? 'cursor-grabbing' : 'cursor-pointer'}`}
             title={draggable ? 'Arraste o card para reordenar' : 'Posicao definida pela ordenacao automatica'}
           >
-            <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${waitingTone ? 'bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-300' : 'bg-blue-50 text-blue-600 ring-1 ring-blue-100 dark:bg-blue-900/25 dark:text-blue-300 dark:ring-blue-800/40'}`}>
-              <User size={14} />
+            <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${waitingTone ? 'bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-300' : 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300'}`}>
+              <User size={12} />
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex items-center justify-between gap-1">
                 <div className="flex min-w-0 items-center gap-1">
-                  <div className="truncate text-[12px] font-semibold leading-tight text-slate-900 dark:text-white">{name}</div>
+                  <div className="truncate text-[11px] font-semibold leading-tight text-slate-900 dark:text-white">{name}</div>
                   {renderChannelBadge(chat.channel, true)}
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
@@ -3199,7 +3199,7 @@ const AgentWorkspace = () => {
                   </span>
                 </div>
               </div>
-              <div className={`mt-1 truncate text-[10px] leading-snug text-slate-500 dark:text-slate-400 ${showGenesysInactivity ? 'pr-10' : ''}`}>{preview}</div>
+              <div className={`mt-px truncate text-[10px] leading-tight text-slate-500 dark:text-slate-400 ${showGenesysInactivity ? 'pr-10' : ''}`}>{preview}</div>
               {waitingTone ? (
                 <div className="text-[9px] font-semibold text-orange-600 dark:text-orange-300">
                   Esperando ha <WaitingElapsed since={chat.waitingSince || chat.transferredAt || chat.createdAt} />
@@ -4365,8 +4365,8 @@ const AgentWorkspace = () => {
       />
 
       {showListPanel ? (
-      <aside className={`w-full lg:w-[320px] lg:min-w-[320px] bg-slate-50 dark:bg-slate-900 border-b lg:border-b-0 lg:border-r border-slate-200 dark:border-slate-800 flex flex-col z-10 lg:max-h-none ${isMobileView ? 'ui-mobile-list-enter' : ''}`}>
-        <div className="border-b border-slate-200 bg-white/95 px-3 py-2.5 backdrop-blur dark:border-slate-800 dark:bg-slate-900/95">
+      <aside className={`w-full lg:w-[300px] lg:min-w-[300px] bg-slate-50 dark:bg-slate-900 border-b lg:border-b-0 lg:border-r border-slate-200 dark:border-slate-800 flex flex-col z-10 lg:max-h-none ${isMobileView ? 'ui-mobile-list-enter' : ''}`}>
+        <div className="border-b border-slate-200 bg-white/95 px-2.5 py-1.5 backdrop-blur dark:border-slate-800 dark:bg-slate-900/95">
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0">
               <div className="truncate text-xs font-semibold text-slate-900 dark:text-white">{user.name}</div>
@@ -4420,7 +4420,7 @@ const AgentWorkspace = () => {
             </div>
           ) : null}
           <section>
-              {!isMobileView ? <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-slate-50/95 px-3 py-2 text-[9px] font-bold uppercase tracking-[0.12em] text-slate-500 backdrop-blur dark:border-slate-800 dark:bg-slate-900/95 dark:text-slate-400"><span>Em atendimento</span><span className="rounded-full bg-blue-100 px-2 py-0.5 text-[9px] tracking-normal text-blue-700 dark:bg-blue-900/35 dark:text-blue-300">{myChats.length}</span></div> : null}
+              {!isMobileView ? <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-slate-50/95 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.12em] text-slate-500 backdrop-blur dark:border-slate-800 dark:bg-slate-900/95 dark:text-slate-400"><span>Em atendimento</span><span className="rounded-full bg-blue-100 px-1.5 py-px text-[8px] tracking-normal text-blue-700 dark:bg-blue-900/35 dark:text-blue-300">{myChats.length}</span></div> : null}
               {myChats.length === 0 ? (
                 <div className="px-4 py-6 text-center text-xs text-slate-400">
                   {activeCalls.length > 0 ? 'Só ligação ativa — sem chats de mensagem.' : 'Nenhum atendimento ativo agora.'}
