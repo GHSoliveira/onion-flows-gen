@@ -439,6 +439,18 @@ export const appendChatMessage = async (chatOrId, message = {}, options = {}) =>
   }
   // isNew=false → não toca lastMessage/lastMessageAt
 
+  if (isNew && hasIncomingTs) {
+    const normalizedSender = String(normalized.sender || '').trim().toLowerCase();
+    const customerTimestamp = new Date(chat.lastCustomerMessageAt || 0).getTime();
+    const agentTimestamp = new Date(chat.lastAgentMessageAt || 0).getTime();
+    if (normalizedSender === 'user' && (!Number.isFinite(customerTimestamp) || incomingTs >= customerTimestamp)) {
+      summarySet.lastCustomerMessageAt = normalized.timestamp;
+    }
+    if (normalizedSender === 'agent' && (!Number.isFinite(agentTimestamp) || incomingTs >= agentTimestamp)) {
+      summarySet.lastAgentMessageAt = normalized.timestamp;
+    }
+  }
+
   const shouldIncrementUnread = isNew
     && String(normalized.sender || '').toLowerCase() === 'user'
     && options.incrementUnread !== false;
@@ -485,6 +497,8 @@ export const refreshChatMessageSummary = async (chatOrId) => {
   });
   const list = Array.isArray(rows) ? rows : [];
   const lastFacing = list.find((row) => isUserFacingMessage(row)) || list[0] || null;
+  const lastCustomer = list.find((row) => String(row?.sender || '').toLowerCase() === 'user') || null;
+  const lastAgent = list.find((row) => String(row?.sender || '').toLowerCase() === 'agent') || null;
   const countRows = await adapter.findMany(COLLECTION, {
     query: { chatId: chat.id, ...(chat.tenantId ? { tenantId: chat.tenantId } : {}) },
     projection: { _id: 0, id: 1 },
@@ -497,7 +511,13 @@ export const refreshChatMessageSummary = async (chatOrId) => {
     lastMessage: lastFacing ? compactMessage(toLegacyChatMessage(lastFacing)) : null,
     lastMessageAt: lastFacing
       ? (lastFacing.timestamp || lastFacing.createdAt || chat.lastMessageAt || null)
-      : (chat.lastMessageAt || null)
+      : (chat.lastMessageAt || null),
+    lastCustomerMessageAt: lastCustomer
+      ? (lastCustomer.timestamp || lastCustomer.createdAt || chat.lastCustomerMessageAt || null)
+      : (chat.lastCustomerMessageAt || null),
+    lastAgentMessageAt: lastAgent
+      ? (lastAgent.timestamp || lastAgent.createdAt || chat.lastAgentMessageAt || null)
+      : (chat.lastAgentMessageAt || null)
   };
   await adapter.updateOne('activeChats', { id: chat.id }, { $set: summarySet });
   return { ...chat, ...summarySet };

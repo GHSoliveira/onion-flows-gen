@@ -41,6 +41,8 @@ export const buildChatSummary = (chat) => {
     vars: chat?.vars || {},
     variables: chat?.variables || {},
     lastMessageAt: chat?.lastMessageAt || lastMessage?.timestamp || lastMessage?.createdAt || chat?.updatedAt || chat?.createdAt || null,
+    lastCustomerMessageAt: chat?.lastCustomerMessageAt || null,
+    lastAgentMessageAt: chat?.lastAgentMessageAt || null,
     lastMessagePreview: buildLastMessagePreview(lastMessage),
     messageCount: Number(chat?.messageCount || 0) || (Array.isArray(chat?.messages) ? chat.messages.length : 0),
     unreadByAgentCount: Number(chat?.unreadByAgentCount || 0) || 0

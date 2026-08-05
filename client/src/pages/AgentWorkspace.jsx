@@ -16,13 +16,33 @@ import {
   User, MessageCircle, Clock, Play, XCircle, Send, Headset, Star, Check, CheckCheck,
   ArrowLeft, Paperclip, Info, MessageSquareText, Loader2, FileText, Image as ImageIcon, Video, AudioLines,
   PanelRightClose, PanelRightOpen, ArrowRightLeft, CornerUpLeft, X as XIcon, Settings, Pencil, Trash2,
-  PhoneCall, Copy, RefreshCw, BrainCircuit, Database, ClipboardList, Router, Activity, TriangleAlert
+  PhoneCall, Copy, RefreshCw, BrainCircuit, Database, ClipboardList, Router, Activity, TriangleAlert, ArrowUpDown
 } from 'lucide-react';
 import OnionAiIcon from '../components/OnionAiIcon';
 import toast from 'react-hot-toast';
 import { CenterSkeleton } from '../components/LoadingSkeleton';
+import { sortChatsForMode } from '../utils/chatSorting';
 
 const chatOrderStorageKey = (userId, listKey) => `agentChatOrder:${userId || 'anon'}:${listKey}`;
+const chatSortStorageKey = (userId) => `agentChatSort:${userId || 'anon'}`;
+const DEFAULT_CHAT_SORT = Object.freeze({ mode: 'customer_recent', direction: 'desc' });
+const CHAT_SORT_OPTIONS = Object.freeze([
+  { value: 'customer_recent', label: 'Mensagem recente do cliente' },
+  { value: 'agent_wait', label: 'Sem resposta do agente' },
+  { value: 'interaction', label: 'Sem interacao' },
+  { value: 'manual', label: 'Ordem manual' },
+]);
+const readChatSort = (userId) => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(chatSortStorageKey(userId)) || 'null');
+    const mode = CHAT_SORT_OPTIONS.some((option) => option.value === saved?.mode)
+      ? saved.mode
+      : DEFAULT_CHAT_SORT.mode;
+    return { mode, direction: saved?.direction === 'asc' ? 'asc' : 'desc' };
+  } catch {
+    return { ...DEFAULT_CHAT_SORT };
+  }
+};
 const GENESYS_INACTIVITY_LIMIT_MS = 10 * 60 * 1000;
 const AUTO_GENESYS_HYDRATE_COOLDOWN_MS = 15 * 1000;
 const CHAT_DETAILS_CACHE_LIMIT = 16;
@@ -521,6 +541,7 @@ const AgentWorkspace = () => {
   const [myChats, setMyChats] = useState([]);
   /** Genesys voice: cards sem mensagens (não listados no inbox de chat) */
   const [activeCalls, setActiveCalls] = useState([]);
+  const [chatSort, setChatSort] = useState(() => readChatSort(user?.id));
   const [draggingChatId, setDraggingChatId] = useState(null);
   const chatDragMovedRef = useRef(false);
   const chatDragStartIdRef = useRef(null);
@@ -656,6 +677,14 @@ const AgentWorkspace = () => {
   const chatDetailsCacheRef = useRef(new Map());
   const chatDetailsInFlightRef = useRef(new Map());
   const automaticHydrateAtRef = useRef(new Map());
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(chatSortStorageKey(user?.id), JSON.stringify(chatSort));
+    } catch {
+      // private mode / quota: ordenacao continua valida nesta sessao
+    }
+  }, [chatSort, user?.id]);
 
   useEffect(() => {
     aiRequestRef.current += 1;
@@ -3075,7 +3104,7 @@ const AgentWorkspace = () => {
     }
   }, [mediaModal.previewUrl]);
 
-  const renderChatListItem = (chat, tone = 'active') => {
+  const renderChatListItem = (chat, tone = 'active', draggable = true) => {
     const chatId = String(chat?.id || '');
     const selected = Boolean(selectedChat?.id) && String(selectedChat.id) === chatId;
     const waitingTone = tone === 'waiting';
@@ -3116,11 +3145,11 @@ const AgentWorkspace = () => {
         key={chatId}
         value={chatId}
         as="div"
-        dragListener
+        dragListener={draggable}
         dragElastic={0.12}
-        onDragStart={() => handleChatCardDragStart(chatId)}
-        onDrag={handleChatCardDrag}
-        onDragEnd={handleChatCardDragEnd}
+        onDragStart={draggable ? () => handleChatCardDragStart(chatId) : undefined}
+        onDrag={draggable ? handleChatCardDrag : undefined}
+        onDragEnd={draggable ? handleChatCardDragEnd : undefined}
         whileDrag={{
           scale: 1.02,
           zIndex: 50,
@@ -3128,7 +3157,7 @@ const AgentWorkspace = () => {
         }}
         transition={{ type: 'spring', stiffness: 480, damping: 36, mass: 0.65 }}
         className={`agent-chat-card mx-1.5 my-1 w-[calc(100%-0.75rem)] ${isDragging ? 'agent-chat-card-dragging' : ''}`}
-        style={{ position: 'relative', touchAction: 'none', zIndex: isDragging ? 50 : 'auto', cursor: isDragging ? 'grabbing' : 'pointer' }}
+        style={{ position: 'relative', touchAction: draggable ? 'none' : 'auto', zIndex: isDragging ? 50 : 'auto', cursor: isDragging ? 'grabbing' : 'pointer' }}
       >
         <div
           className={`ui-card-hover relative overflow-hidden rounded-lg border px-1.5 py-1 text-left transition-[border-color,box-shadow,background-color] duration-150 ${shellClass} ${selectedOutlineClass}`}
@@ -3140,7 +3169,7 @@ const AgentWorkspace = () => {
             type="button"
             onClick={() => handleChatCardClick(chat)}
             className={`relative z-10 flex w-full min-w-0 items-center gap-1.5 text-left ${isDragging ? 'cursor-grabbing' : 'cursor-pointer'}`}
-            title="Arraste o card para reordenar"
+            title={draggable ? 'Arraste o card para reordenar' : 'Posicao definida pela ordenacao automatica'}
           >
             <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${waitingTone ? 'bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-300' : 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300'}`}>
               <User size={12} />
@@ -4275,6 +4304,18 @@ const AgentWorkspace = () => {
     || Number(navigator.hardwareConcurrency || 8) <= 4
     || navigator.connection?.saveData === true
   );
+  const automaticChatSort = chatSort.mode !== 'manual';
+  const orderedMyChats = useMemo(
+    () => sortChatsForMode(myChats, chatSort.mode, chatSort.direction),
+    [myChats, chatSort.mode, chatSort.direction]
+  );
+  const orderedWaitingChats = useMemo(
+    () => sortChatsForMode(waitingChats, chatSort.mode, chatSort.direction),
+    [waitingChats, chatSort.mode, chatSort.direction]
+  );
+  const chatSortDirectionLabel = chatSort.mode === 'customer_recent'
+    ? (chatSort.direction === 'desc' ? 'Mais recente' : 'Mais antiga')
+    : (chatSort.direction === 'desc' ? 'Maior espera' : 'Menor espera');
   const loadEarlierMessages = () => {
     const container = chatScrollRef.current;
     preserveScrollHeightRef.current = container?.scrollHeight ?? null;
@@ -4349,6 +4390,29 @@ const AgentWorkspace = () => {
               </button>
             </div>
           </div>
+          <div className="mt-1.5 flex items-center gap-1.5">
+            <div className="relative min-w-0 flex-1">
+              <ArrowUpDown size={11} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" />
+              <select
+                aria-label="Ordenacao dinamica dos clientes"
+                value={chatSort.mode}
+                onChange={(event) => setChatSort((previous) => ({ ...previous, mode: event.target.value }))}
+                className="h-7 w-full appearance-none rounded-md border border-slate-200 bg-slate-50 pl-6 pr-2 text-[10px] font-semibold text-slate-600 outline-none transition-colors hover:border-slate-300 focus:border-blue-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+              >
+                {CHAT_SORT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </div>
+            {automaticChatSort ? (
+              <button
+                type="button"
+                onClick={() => setChatSort((previous) => ({ ...previous, direction: previous.direction === 'desc' ? 'asc' : 'desc' }))}
+                className="h-7 shrink-0 rounded-md border border-slate-200 bg-white px-2 text-[9px] font-bold text-slate-500 transition-colors hover:border-blue-300 hover:text-blue-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-blue-700 dark:hover:text-blue-300"
+                title="Inverter a direcao da ordenacao"
+              >
+                {chatSortDirectionLabel}
+              </button>
+            ) : null}
+          </div>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar">
@@ -4384,11 +4448,11 @@ const AgentWorkspace = () => {
                   as="div"
                   axis="y"
                   layoutScroll
-                  values={myChats.map((chat) => String(chat.id))}
-                  onReorder={(nextIds) => handleChatListReorderByIds('active', nextIds, myChats)}
+                  values={orderedMyChats.map((chat) => String(chat.id))}
+                  onReorder={automaticChatSort ? () => {} : (nextIds) => handleChatListReorderByIds('active', nextIds, myChats)}
                   className="agent-chat-reorder-group flex flex-col"
                 >
-                  {myChats.map((chat) => renderChatListItem(chat, 'active'))}
+                  {orderedMyChats.map((chat) => renderChatListItem(chat, 'active', !automaticChatSort))}
                 </Reorder.Group>
               )}
             </section>
@@ -4428,11 +4492,11 @@ const AgentWorkspace = () => {
                   as="div"
                   axis="y"
                   layoutScroll
-                  values={waitingChats.map((chat) => String(chat.id))}
-                  onReorder={(nextIds) => handleChatListReorderByIds('waiting', nextIds, waitingChats)}
+                  values={orderedWaitingChats.map((chat) => String(chat.id))}
+                  onReorder={automaticChatSort ? () => {} : (nextIds) => handleChatListReorderByIds('waiting', nextIds, waitingChats)}
                   className="agent-chat-reorder-group flex flex-col"
                 >
-                  {waitingChats.map((chat) => renderChatListItem(chat, 'waiting'))}
+                  {orderedWaitingChats.map((chat) => renderChatListItem(chat, 'waiting', !automaticChatSort))}
                 </Reorder.Group>
               )}
             </section>

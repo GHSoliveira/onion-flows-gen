@@ -210,6 +210,8 @@ const CHAT_SUMMARY_PROJECTION = {
   ixcData: 1,
   lastMessage: 1,
   lastMessageAt: 1,
+  lastCustomerMessageAt: 1,
+  lastAgentMessageAt: 1,
   messageCount: 1,
   unreadByAgentCount: 1,
   // Genesys espelho (lista leve + hydrate sob demanda)
