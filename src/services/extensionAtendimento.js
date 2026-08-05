@@ -19,6 +19,8 @@ export const EXTENSION_CLIENT_KINDS = new Set([
 export const extensionRoomForAgent = (agentId) => `agent:${agentId}:extension`;
 const onlyDigits = (value) => String(value || '').replace(/\D/g, '');
 const GENESYS_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const extensionErrorDedupe = new Map();
+const EXTENSION_ERROR_DEDUPE_MS = 60000;
 
 const pickString = (...values) => {
   for (const value of values) {
@@ -1829,6 +1831,28 @@ export const registerExtensionAtendimentoHandlers = (socket) => {
   socket.on('ext:atendimento:mensagem', wrap(handleExtMensagem, 'mensagem'));
   socket.on('ext:atendimento:cliente', wrap(handleExtCliente, 'cliente'));
   socket.on('ext:atendimento:encerrar', wrap(handleExtEncerrar, 'encerrar'));
+
+  socket.on('ext:log:error', (payload = {}) => {
+    if (!socket.userId || !isExtensionSocket(socket)) return;
+    const message = pickString(payload.message).slice(0, 120) || 'Falha na extensão';
+    const detail = pickString(payload.detail).slice(0, 180);
+    const fingerprint = pickString(payload.fingerprint, `${message}|${detail}`).slice(0, 320).toLowerCase();
+    const dedupeKey = `${socket.userId}:${fingerprint}`;
+    const now = Date.now();
+    const lastSentAt = Number(extensionErrorDedupe.get(dedupeKey) || 0);
+    if (now - lastSentAt < EXTENSION_ERROR_DEDUPE_MS) return;
+    extensionErrorDedupe.set(dedupeKey, now);
+    for (const [key, sentAt] of extensionErrorDedupe) {
+      if (now - sentAt > EXTENSION_ERROR_DEDUPE_MS * 5) extensionErrorDedupe.delete(key);
+    }
+    const io = getIo();
+    io?.to(`agent:${socket.userId}`).emit('extension_error', {
+      title: 'Falha na extensão Onion',
+      message,
+      detail: detail || null,
+      occurredAt: Number(payload.at || now)
+    });
+  });
 
   // Extensão → app (fase 4 ack)
   socket.on('cmd:resultado', wrap(handleCmdResultado, 'cmd:resultado'));

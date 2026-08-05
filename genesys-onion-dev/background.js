@@ -81,6 +81,8 @@ let pendingFocus = { conversationId: "", at: 0 };
 const queue = [];
 const conversations = new Map();
 const logs = [];
+const extensionErrorNotifications = new Map();
+const EXTENSION_ERROR_DEDUPE_MS = 60000;
 const rateWindow = [];
 let participantResolveSeq = 0;
 let focusValidationSeq = 0;
@@ -1928,9 +1930,41 @@ async function resolveCommunicationFromActiveConversations(conversationId) {
   return communicationId;
 }
 
+function sanitizeExtensionErrorText(value, maxLength = 180) {
+  return String(value || "")
+    .replace(/\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b/gi, "[email]")
+    .replace(/\b(?:\+?55\s*)?(?:\(?\d{2}\)?\s*)?\d{4,5}[-.\s]?\d{4}\b/g, "[telefone]")
+    .replace(/\b\d{11,14}\b/g, "[documento]")
+    .replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/gi, "[id]")
+    .replace(/(authorization|token|secret|password)\s*[:=]\s*[^\s,;]+/gi, "$1=[protegido]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
+function notifyExtensionError(entry) {
+  if (!socket?.connected || entry?.level !== "error") return;
+  const message = sanitizeExtensionErrorText(entry.message, 120) || "Falha na extensão";
+  const detail = sanitizeExtensionErrorText(entry.detail, 180);
+  const fingerprint = `${message}|${detail}`.toLowerCase();
+  const now = Date.now();
+  const lastSentAt = Number(extensionErrorNotifications.get(fingerprint) || 0);
+  if (now - lastSentAt < EXTENSION_ERROR_DEDUPE_MS) return;
+  extensionErrorNotifications.set(fingerprint, now);
+  for (const [key, sentAt] of extensionErrorNotifications) {
+    if (now - sentAt > EXTENSION_ERROR_DEDUPE_MS * 5) extensionErrorNotifications.delete(key);
+  }
+  socket.emit("ext:log:error", { message, detail, at: Number(entry.at || now), fingerprint });
+}
+function flushExtensionErrorNotifications() {
+  logs.filter((entry) => entry.level === "error" && Date.now() - entry.at <= 5 * 60 * 1000)
+    .reverse()
+    .forEach(notifyExtensionError);
+}
 function log(level, message, detail = "") {
-  logs.unshift({ at: Date.now(), level, message, detail: String(detail || "") });
+  const entry = { at: Date.now(), level, message, detail: String(detail || "") };
+  logs.unshift(entry);
   logs.splice(100);
+  if (level === "error") notifyExtensionError(entry);
 }
 function normalizeName(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -4744,6 +4778,7 @@ async function ensureSocket() {
     socket = next;
     next.on("connect", () => {
       log("ok", "Socket conectado", baseUrl);
+      flushExtensionErrorNotifications();
       next.timeout(ACK_TIMEOUT_MS).emit("ext:register", { client: "genesys-extension", environment: "dev" }, (error, response) => {
         if (error) log("error", "Registro Onion sem ACK", error.message || "timeout");
         else if (response?.registered === false) log("error", "Onion não reconheceu a extensão", JSON.stringify(response));

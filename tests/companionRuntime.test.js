@@ -46,6 +46,23 @@ test('ponte realtime encaminha ACKs do Genesys e usa união de salas', async () 
   assert.match(serverSource, /httpServer\.listen\(PORT, '127\.0\.0\.1'/);
 });
 
+test('erros da extensao viram notificacoes efemeras e deduplicadas para o agente', async () => {
+  const root = path.resolve(import.meta.dirname, '..');
+  const backgroundSource = await fs.readFile(path.join(root, 'genesys-onion-dev', 'background.js'), 'utf8');
+  const extensionSource = await fs.readFile(path.join(root, 'src', 'services', 'extensionAtendimento.js'), 'utf8');
+  const socketSource = await fs.readFile(path.join(root, 'client', 'src', 'services', 'socket.js'), 'utf8');
+  const appSource = await fs.readFile(path.join(root, 'client', 'src', 'App.jsx'), 'utf8');
+
+  assert.match(backgroundSource, /socket\.emit\("ext:log:error"/);
+  assert.match(backgroundSource, /sanitizeExtensionErrorText/);
+  assert.match(backgroundSource, /EXTENSION_ERROR_DEDUPE_MS/);
+  assert.match(extensionSource, /socket\.on\('ext:log:error'/);
+  assert.match(extensionSource, /emit\('extension_error'/);
+  assert.match(socketSource, /this\.socket\.on\('extension_error'/);
+  assert.match(appSource, /socketService\.on\('extension_error'/);
+  assert.match(appSource, /user\.role !== 'AGENT'/);
+});
+
 test('frontend local usa a origem atual e nao volta para a porta legada 3001', async () => {
   const root = path.resolve(import.meta.dirname, '..');
   const apiSource = await fs.readFile(path.join(root, 'client', 'src', 'services', 'api.js'), 'utf8');

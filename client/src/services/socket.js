@@ -96,6 +96,10 @@ class SocketService {
       this.emit('whatsapp_error', data);
     });
 
+    this.socket.on('extension_error', (data) => {
+      this.emit('extension_error', data);
+    });
+
     this.socket.on('campaign_created', (data) => {
       this.emit('campaign_update', data);
     });

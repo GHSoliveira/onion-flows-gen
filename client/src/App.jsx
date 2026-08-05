@@ -236,14 +236,31 @@ const AppContent = () => {
       toast.error(`${title}: ${message}`, { duration: 7000 });
     };
 
+    const onExtensionError = (alert) => {
+      if (user.role !== 'AGENT') return;
+      const title = alert?.title || 'Falha na extensão Onion';
+      const summary = alert?.message || 'A extensão registrou uma falha.';
+      const detail = alert?.detail ? ` — ${alert.detail}` : '';
+      const message = `${summary}${detail}`.slice(0, 260);
+      addNotification({
+        type: 'extension_error',
+        title,
+        message,
+        action: '/agent'
+      });
+      toast.error(`${title}: ${message}`, { duration: 7000 });
+    };
+
     socketService.on('queue_update', onQueueUpdate);
     socketService.on('new_log', onNewLog);
     socketService.on('whatsapp_error', onWhatsAppError);
+    socketService.on('extension_error', onExtensionError);
 
     return () => {
       socketService.off('queue_update', onQueueUpdate);
       socketService.off('new_log', onNewLog);
       socketService.off('whatsapp_error', onWhatsAppError);
+      socketService.off('extension_error', onExtensionError);
     };
   }, [user]);
 
