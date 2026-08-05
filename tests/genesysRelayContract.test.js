@@ -123,3 +123,9 @@ test('conversationId encerrado que volta ativo inicia uma nova sessao local', as
   assert.match(extension, /reviveClosedConversationState\(conversationId, state, "authoritative-roster"\)/);
   assert.match(extension, /reviveClosedConversationState\(snapshot\.conversationId, state, "notification-snapshot"\)/);
 });
+
+test('evento de fechamento antigo nao remove card novo com conversationId reutilizado', async () => {
+  const workspace = await loadAgentWorkspaceSource();
+  assert.match(workspace, /closedId \? chat\.id === closedId : false/);
+  assert.match(workspace, /!closedId\s+&&\s+closedConvId/);
+});

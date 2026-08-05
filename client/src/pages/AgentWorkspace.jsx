@@ -1853,8 +1853,10 @@ const AgentWorkspace = () => {
       const isClosedChat = (chat) => Boolean(
         chat
         && (
-          (closedId && chat.id === closedId)
+          (closedId ? chat.id === closedId : false)
           || (
+            !closedId
+            &&
             closedConvId
             && [chat.genesysConvId, chat.externalConvId, chat.conversationId]
               .some((value) => String(value || '') === closedConvId)
