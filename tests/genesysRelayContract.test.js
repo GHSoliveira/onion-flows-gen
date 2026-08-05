@@ -112,3 +112,14 @@ test('fluxo rapido de OS aceita somente Suporte Inicial aberta no Suporte N1', a
   assert.match(extension, /Comando de OS duplicado ignorado/);
   assert.match(extension, /ixcOsCommandCache\.set\(requestId/);
 });
+
+test('conversationId encerrado que volta ativo inicia uma nova sessao local', async () => {
+  const extension = await readFile(new URL('../genesys-onion-dev/background.js', import.meta.url), 'utf8');
+  assert.match(extension, /function reviveClosedConversationState/);
+  assert.match(extension, /state\.syncGeneration = crypto\.randomUUID\(\)/);
+  assert.match(extension, /state\.upserted = false/);
+  assert.match(extension, /state\.backfilled = false/);
+  assert.match(extension, /state\.messageIds = new Set\(\)/);
+  assert.match(extension, /reviveClosedConversationState\(conversationId, state, "authoritative-roster"\)/);
+  assert.match(extension, /reviveClosedConversationState\(snapshot\.conversationId, state, "notification-snapshot"\)/);
+});

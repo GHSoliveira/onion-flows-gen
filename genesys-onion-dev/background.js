@@ -1,6 +1,6 @@
 importScripts("external-status.js", "lib/socket.io.min.js");
 
-const EXTENSION_BUILD = "2026.08.05.2";
+const EXTENSION_BUILD = "2026.08.05.3";
 const SETTINGS_KEY = "onionDevSettings";
 const AUTH_KEY = "onionDevAuth";
 const COMMUNICATIONS_KEY = "onionDevCommunications";
@@ -2126,6 +2126,7 @@ async function reconcileCardRoster(roster = {}) {
 
     for (const conversationId of activeIds) {
       const state = conversationState(conversationId);
+      reviveClosedConversationState(conversationId, state, "authoritative-roster");
       state.closed = false;
       state.observedAgentActive = true;
       if (authoritative) state.lastApiConfirmedAt = Date.now();
@@ -2241,6 +2242,24 @@ function conversationState(id) {
   });
   return conversations.get(id);
 }
+function reviveClosedConversationState(conversationId, state, source = "active-evidence") {
+  if (!state || (!state.closed && !["CLOSING", "CLOSED"].includes(state.lifecycle))) return false;
+  state.lifecycle = "DISCOVERED";
+  state.closed = false;
+  state.closedAt = 0;
+  state.upserted = false;
+  state.backfilled = false;
+  state.forceSnapshot = true;
+  state.syncGeneration = crypto.randomUUID();
+  state.messageIds = new Set();
+  state.passivePendingMessageIds = new Set();
+  state.passiveMediaPendingAt = new Map();
+  state.observedMessageCount = 0;
+  state.observedMissingMessageCount = 0;
+  closureSuspicions.delete(conversationId);
+  log("info", "Conversa Genesys reaberta como nova sessão", `${conversationId.slice(0, 8)} · ${source}`);
+  return true;
+}
 function normalizeNotificationSnapshot(raw, observedAt = Date.now()) {
   const conversationId = String(raw?.conversationId || "");
   if (!UUID_RE.test(conversationId)) return null;
@@ -2305,6 +2324,7 @@ function rememberNotificationSnapshot(raw, observedAt = Date.now()) {
   if (snapshot.customerName) state.participantName = snapshot.customerName;
   if (typeof snapshot.agentActive === "boolean") state.observedAgentActive = snapshot.agentActive;
   if (snapshot.agentActive === true) {
+    reviveClosedConversationState(snapshot.conversationId, state, "notification-snapshot");
     state.lifecycle = state.upserted ? "ACTIVE" : "DISCOVERED";
     state.closed = false;
     if (deliveryRosterGuard.blocking) deliveryRosterGuard.activeIds.add(snapshot.conversationId);
@@ -2374,7 +2394,10 @@ function observeConversationNetwork(message = {}) {
     const state = conversationState(conversationId);
     state.lastNetworkSeenAt = Number(message.observedAt || Date.now());
     if (typeof item?.agentActive === "boolean") state.observedAgentActive = item.agentActive;
-    if (item.active === true && !state.closed) state.lifecycle = state.upserted ? "ACTIVE" : "DISCOVERED";
+    if (item.active === true) {
+      reviveClosedConversationState(conversationId, state, "passive-network");
+      state.lifecycle = state.upserted ? "ACTIVE" : "DISCOVERED";
+    }
     if (item.active === false) state.observedInactiveAt = state.lastNetworkSeenAt;
     const communicationIds = (Array.isArray(item.agentCommunicationIds) ? item.agentCommunicationIds : [])
       .map((id) => String(id || ""))
@@ -2466,6 +2489,7 @@ async function processPassiveConversationDiscovery(message = {}) {
       }
       observationMetrics.passiveDiscoveryCandidates += 1;
       const state = conversationState(conversationId);
+      reviveClosedConversationState(conversationId, state, "passive-discovery");
       state.participantName = customerName;
       if (state.upserted || state.passiveDiscoveryPending || state.closed) return;
       state.passiveDiscoveryPending = true;
@@ -3778,6 +3802,7 @@ async function syncConversationFromNotification(conversationId) {
     if (useNotificationSnapshot) state.lastNetworkSeenAt = notificationSnapshot.observedAt;
     else state.lastApiConfirmedAt = Date.now();
     state.participantName = customerName;
+    reviveClosedConversationState(conversationId, state, "notification-sync");
     state.closed = false;
     if (deliveryRosterGuard.blocking) {
       deliveryRosterGuard.activeIds.add(conversationId);
