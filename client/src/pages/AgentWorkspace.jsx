@@ -25,20 +25,24 @@ import { sortChatsForMode } from '../utils/chatSorting';
 
 const chatOrderStorageKey = (userId, listKey) => `agentChatOrder:${userId || 'anon'}:${listKey}`;
 const chatSortStorageKey = (userId) => `agentChatSort:${userId || 'anon'}`;
-const DEFAULT_CHAT_SORT = Object.freeze({ mode: 'customer_recent', direction: 'desc' });
+const DEFAULT_CHAT_SORT = Object.freeze({ enabled: true, mode: 'customer_recent', direction: 'desc' });
 const CHAT_SORT_OPTIONS = Object.freeze([
   { value: 'customer_recent', label: 'Mensagem recente do cliente' },
   { value: 'agent_wait', label: 'Sem resposta do agente' },
   { value: 'interaction', label: 'Sem interacao' },
-  { value: 'manual', label: 'Ordem manual' },
 ]);
 const readChatSort = (userId) => {
   try {
     const saved = JSON.parse(localStorage.getItem(chatSortStorageKey(userId)) || 'null');
+    const legacyManual = saved?.mode === 'manual';
     const mode = CHAT_SORT_OPTIONS.some((option) => option.value === saved?.mode)
       ? saved.mode
       : DEFAULT_CHAT_SORT.mode;
-    return { mode, direction: saved?.direction === 'asc' ? 'asc' : 'desc' };
+    return {
+      enabled: legacyManual ? false : saved?.enabled !== false,
+      mode,
+      direction: saved?.direction === 'asc' ? 'asc' : 'desc',
+    };
   } catch {
     return { ...DEFAULT_CHAT_SORT };
   }
@@ -542,6 +546,7 @@ const AgentWorkspace = () => {
   /** Genesys voice: cards sem mensagens (não listados no inbox de chat) */
   const [activeCalls, setActiveCalls] = useState([]);
   const [chatSort, setChatSort] = useState(() => readChatSort(user?.id));
+  const [chatSortDraft, setChatSortDraft] = useState(() => readChatSort(user?.id));
   const [draggingChatId, setDraggingChatId] = useState(null);
   const chatDragMovedRef = useRef(false);
   const chatDragStartIdRef = useRef(null);
@@ -677,14 +682,6 @@ const AgentWorkspace = () => {
   const chatDetailsCacheRef = useRef(new Map());
   const chatDetailsInFlightRef = useRef(new Map());
   const automaticHydrateAtRef = useRef(new Map());
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(chatSortStorageKey(user?.id), JSON.stringify(chatSort));
-    } catch {
-      // private mode / quota: ordenacao continua valida nesta sessao
-    }
-  }, [chatSort, user?.id]);
 
   useEffect(() => {
     aiRequestRef.current += 1;
@@ -2740,6 +2737,7 @@ const AgentWorkspace = () => {
 
   const openAppearanceSettings = () => {
     setAppearanceDraft({ ...chatAppearance });
+    setChatSortDraft({ ...chatSort });
     setNameEditor({ open: true, value: user?.name || '', saving: false });
   };
 
@@ -2783,7 +2781,17 @@ const AgentWorkspace = () => {
       );
       setChatAppearance(normalizedAppearance);
       setAppearanceDraft(normalizedAppearance);
-      toast.success('Aparência atualizada');
+      const normalizedSort = {
+        enabled: chatSortDraft.enabled === true,
+        mode: CHAT_SORT_OPTIONS.some((option) => option.value === chatSortDraft.mode)
+          ? chatSortDraft.mode
+          : DEFAULT_CHAT_SORT.mode,
+        direction: chatSortDraft.direction === 'asc' ? 'asc' : 'desc',
+      };
+      localStorage.setItem(chatSortStorageKey(user?.id), JSON.stringify(normalizedSort));
+      setChatSort(normalizedSort);
+      setChatSortDraft(normalizedSort);
+      toast.success('Preferências atualizadas');
       setNameEditor({ open: false, value: '', saving: false });
     } catch (error) {
       toast.error(error?.message || 'Falha ao salvar preferências');
@@ -3156,11 +3164,11 @@ const AgentWorkspace = () => {
           cursor: 'grabbing'
         }}
         transition={{ type: 'spring', stiffness: 480, damping: 36, mass: 0.65 }}
-        className={`agent-chat-card mx-1.5 my-1 w-[calc(100%-0.75rem)] ${isDragging ? 'agent-chat-card-dragging' : ''}`}
+        className={`agent-chat-card mx-2 my-1.5 w-[calc(100%-1rem)] ${isDragging ? 'agent-chat-card-dragging' : ''}`}
         style={{ position: 'relative', touchAction: draggable ? 'none' : 'auto', zIndex: isDragging ? 50 : 'auto', cursor: isDragging ? 'grabbing' : 'pointer' }}
       >
         <div
-          className={`ui-card-hover relative overflow-hidden rounded-lg border px-1.5 py-1 text-left transition-[border-color,box-shadow,background-color] duration-150 ${shellClass} ${selectedOutlineClass}`}
+          className={`ui-card-hover relative overflow-hidden rounded-xl border px-2.5 py-2 text-left transition-[border-color,box-shadow,background-color] duration-200 ${shellClass} ${selectedOutlineClass}`}
           data-selected={selected ? 'true' : 'false'}
           data-chat-id={chatId}
         >
@@ -3168,16 +3176,16 @@ const AgentWorkspace = () => {
           <button
             type="button"
             onClick={() => handleChatCardClick(chat)}
-            className={`relative z-10 flex w-full min-w-0 items-center gap-1.5 text-left ${isDragging ? 'cursor-grabbing' : 'cursor-pointer'}`}
+            className={`relative z-10 flex w-full min-w-0 items-center gap-2.5 text-left ${isDragging ? 'cursor-grabbing' : 'cursor-pointer'}`}
             title={draggable ? 'Arraste o card para reordenar' : 'Posicao definida pela ordenacao automatica'}
           >
-            <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${waitingTone ? 'bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-300' : 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300'}`}>
-              <User size={12} />
+            <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${waitingTone ? 'bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-300' : 'bg-blue-50 text-blue-600 ring-1 ring-blue-100 dark:bg-blue-900/25 dark:text-blue-300 dark:ring-blue-800/40'}`}>
+              <User size={14} />
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex items-center justify-between gap-1">
                 <div className="flex min-w-0 items-center gap-1">
-                  <div className="truncate text-[11px] font-semibold leading-tight text-gray-900 dark:text-white">{name}</div>
+                  <div className="truncate text-[12px] font-semibold leading-tight text-slate-900 dark:text-white">{name}</div>
                   {renderChannelBadge(chat.channel, true)}
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
@@ -3186,12 +3194,12 @@ const AgentWorkspace = () => {
                       {unreadCount > 99 ? '99+' : unreadCount}
                     </span>
                   ) : null}
-                  <span className="text-[9px] font-medium tabular-nums text-gray-400">
+                  <span className="text-[9px] font-medium tabular-nums text-slate-400">
                     {formatTime(lastMessage?.timestamp || chat.updatedAt || chat.createdAt)}
                   </span>
                 </div>
               </div>
-              <div className={`mt-px truncate text-[10px] leading-tight text-gray-500 dark:text-gray-400 ${showGenesysInactivity ? 'pr-10' : ''}`}>{preview}</div>
+              <div className={`mt-1 truncate text-[10px] leading-snug text-slate-500 dark:text-slate-400 ${showGenesysInactivity ? 'pr-10' : ''}`}>{preview}</div>
               {waitingTone ? (
                 <div className="text-[9px] font-semibold text-orange-600 dark:text-orange-300">
                   Esperando ha <WaitingElapsed since={chat.waitingSince || chat.transferredAt || chat.createdAt} />
@@ -4304,18 +4312,15 @@ const AgentWorkspace = () => {
     || Number(navigator.hardwareConcurrency || 8) <= 4
     || navigator.connection?.saveData === true
   );
-  const automaticChatSort = chatSort.mode !== 'manual';
+  const automaticChatSort = chatSort.enabled === true;
   const orderedMyChats = useMemo(
-    () => sortChatsForMode(myChats, chatSort.mode, chatSort.direction),
-    [myChats, chatSort.mode, chatSort.direction]
+    () => sortChatsForMode(myChats, automaticChatSort ? chatSort.mode : 'manual', chatSort.direction),
+    [myChats, automaticChatSort, chatSort.mode, chatSort.direction]
   );
   const orderedWaitingChats = useMemo(
-    () => sortChatsForMode(waitingChats, chatSort.mode, chatSort.direction),
-    [waitingChats, chatSort.mode, chatSort.direction]
+    () => sortChatsForMode(waitingChats, automaticChatSort ? chatSort.mode : 'manual', chatSort.direction),
+    [waitingChats, automaticChatSort, chatSort.mode, chatSort.direction]
   );
-  const chatSortDirectionLabel = chatSort.mode === 'customer_recent'
-    ? (chatSort.direction === 'desc' ? 'Mais recente' : 'Mais antiga')
-    : (chatSort.direction === 'desc' ? 'Maior espera' : 'Menor espera');
   const loadEarlierMessages = () => {
     const container = chatScrollRef.current;
     preserveScrollHeightRef.current = container?.scrollHeight ?? null;
@@ -4360,8 +4365,8 @@ const AgentWorkspace = () => {
       />
 
       {showListPanel ? (
-      <aside className={`w-full lg:w-[300px] lg:min-w-[300px] bg-slate-50 dark:bg-slate-900 border-b lg:border-b-0 lg:border-r border-slate-200 dark:border-slate-800 flex flex-col z-10 lg:max-h-none ${isMobileView ? 'ui-mobile-list-enter' : ''}`}>
-        <div className="border-b border-slate-200 bg-white/90 px-2.5 py-1.5 backdrop-blur dark:border-slate-800 dark:bg-slate-900/90">
+      <aside className={`w-full lg:w-[320px] lg:min-w-[320px] bg-slate-50 dark:bg-slate-900 border-b lg:border-b-0 lg:border-r border-slate-200 dark:border-slate-800 flex flex-col z-10 lg:max-h-none ${isMobileView ? 'ui-mobile-list-enter' : ''}`}>
+        <div className="border-b border-slate-200 bg-white/95 px-3 py-2.5 backdrop-blur dark:border-slate-800 dark:bg-slate-900/95">
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0">
               <div className="truncate text-xs font-semibold text-slate-900 dark:text-white">{user.name}</div>
@@ -4390,29 +4395,6 @@ const AgentWorkspace = () => {
               </button>
             </div>
           </div>
-          <div className="mt-1.5 flex items-center gap-1.5">
-            <div className="relative min-w-0 flex-1">
-              <ArrowUpDown size={11} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" />
-              <select
-                aria-label="Ordenacao dinamica dos clientes"
-                value={chatSort.mode}
-                onChange={(event) => setChatSort((previous) => ({ ...previous, mode: event.target.value }))}
-                className="h-7 w-full appearance-none rounded-md border border-slate-200 bg-slate-50 pl-6 pr-2 text-[10px] font-semibold text-slate-600 outline-none transition-colors hover:border-slate-300 focus:border-blue-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-              >
-                {CHAT_SORT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-              </select>
-            </div>
-            {automaticChatSort ? (
-              <button
-                type="button"
-                onClick={() => setChatSort((previous) => ({ ...previous, direction: previous.direction === 'desc' ? 'asc' : 'desc' }))}
-                className="h-7 shrink-0 rounded-md border border-slate-200 bg-white px-2 text-[9px] font-bold text-slate-500 transition-colors hover:border-blue-300 hover:text-blue-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-blue-700 dark:hover:text-blue-300"
-                title="Inverter a direcao da ordenacao"
-              >
-                {chatSortDirectionLabel}
-              </button>
-            ) : null}
-          </div>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar">
@@ -4438,7 +4420,7 @@ const AgentWorkspace = () => {
             </div>
           ) : null}
           <section>
-              {!isMobileView ? <div className="sticky top-0 z-10 border-b border-blue-100 bg-blue-50/95 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wide text-blue-700 backdrop-blur dark:border-blue-900/30 dark:bg-blue-900/20 dark:text-blue-300">Em atendimento</div> : null}
+              {!isMobileView ? <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-slate-50/95 px-3 py-2 text-[9px] font-bold uppercase tracking-[0.12em] text-slate-500 backdrop-blur dark:border-slate-800 dark:bg-slate-900/95 dark:text-slate-400"><span>Em atendimento</span><span className="rounded-full bg-blue-100 px-2 py-0.5 text-[9px] tracking-normal text-blue-700 dark:bg-blue-900/35 dark:text-blue-300">{myChats.length}</span></div> : null}
               {myChats.length === 0 ? (
                 <div className="px-4 py-6 text-center text-xs text-slate-400">
                   {activeCalls.length > 0 ? 'Só ligação ativa — sem chats de mensagem.' : 'Nenhum atendimento ativo agora.'}
@@ -5026,6 +5008,65 @@ const AgentWorkspace = () => {
                       <span className="mt-1 block text-[9px] text-slate-400">Usado também em {'{agente.nome}'} nas mensagens rápidas.</span>
                     </label>
 
+                    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50/70 dark:border-slate-700 dark:bg-slate-800/45">
+                      <div className="flex items-center justify-between gap-4 px-3.5 py-3">
+                        <div className="flex min-w-0 items-center gap-3">
+                          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-blue-600 shadow-sm ring-1 ring-slate-200 dark:bg-slate-800 dark:text-blue-300 dark:ring-slate-700">
+                            <ArrowUpDown size={16} />
+                          </span>
+                          <span className="min-w-0">
+                            <span className="block text-[11px] font-bold text-slate-800 dark:text-slate-100">Ordenação dinâmica</span>
+                            <span className="mt-0.5 block text-[9px] leading-4 text-slate-400">Reposiciona os clientes conforme novas mensagens.</span>
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={chatSortDraft.enabled}
+                          aria-label="Ativar ordenação dinâmica"
+                          onClick={() => setChatSortDraft((previous) => ({ ...previous, enabled: !previous.enabled }))}
+                          className={`relative h-6 w-11 shrink-0 rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 dark:focus:ring-offset-slate-900 ${chatSortDraft.enabled ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-600'}`}
+                        >
+                          <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200 ${chatSortDraft.enabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                        </button>
+                      </div>
+
+                      {chatSortDraft.enabled ? (
+                        <div className="grid grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)] gap-2 border-t border-slate-200 bg-white/80 p-3 dark:border-slate-700 dark:bg-slate-900/45">
+                          <label className="min-w-0">
+                            <span className="mb-1.5 block text-[9px] font-bold uppercase tracking-wide text-slate-400">Critério</span>
+                            <select
+                              value={chatSortDraft.mode}
+                              onChange={(event) => setChatSortDraft((previous) => ({ ...previous, mode: event.target.value }))}
+                              className="h-9 w-full rounded-xl border border-slate-200 bg-white px-2.5 text-[10px] font-semibold text-slate-700 outline-none transition-colors focus:border-blue-400 focus:ring-2 focus:ring-blue-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-blue-900/30"
+                            >
+                              {CHAT_SORT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                            </select>
+                          </label>
+                          <label className="min-w-0">
+                            <span className="mb-1.5 block text-[9px] font-bold uppercase tracking-wide text-slate-400">Prioridade</span>
+                            <select
+                              value={chatSortDraft.direction}
+                              onChange={(event) => setChatSortDraft((previous) => ({ ...previous, direction: event.target.value }))}
+                              className="h-9 w-full rounded-xl border border-slate-200 bg-white px-2.5 text-[10px] font-semibold text-slate-700 outline-none transition-colors focus:border-blue-400 focus:ring-2 focus:ring-blue-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-blue-900/30"
+                            >
+                              {chatSortDraft.mode === 'customer_recent' ? (
+                                <>
+                                  <option value="desc">Mais recente</option>
+                                  <option value="asc">Mais antiga</option>
+                                </>
+                              ) : (
+                                <>
+                                  <option value="desc">Maior espera</option>
+                                  <option value="asc">Menor espera</option>
+                                </>
+                              )}
+                            </select>
+                          </label>
+                        </div>
+                      ) : null}
+                    </section>
+
                     <div>
                       <div className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">Fundo da conversa</div>
                       <div className="grid grid-cols-3 gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
@@ -5136,7 +5177,7 @@ const AgentWorkspace = () => {
               </div>
 
               <div className="flex items-center gap-2 border-t border-slate-100 px-4 py-3 dark:border-slate-800 sm:px-5">
-                <button type="button" disabled={nameEditor.saving} onClick={() => setAppearanceDraft({ ...DEFAULT_CHAT_APPEARANCE })} className="mr-auto inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-[10px] font-bold text-slate-500 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-slate-800"><RefreshCw size={12} />Restaurar padrão</button>
+                <button type="button" disabled={nameEditor.saving} onClick={() => { setAppearanceDraft({ ...DEFAULT_CHAT_APPEARANCE }); setChatSortDraft({ ...DEFAULT_CHAT_SORT }); }} className="mr-auto inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-[10px] font-bold text-slate-500 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-slate-800"><RefreshCw size={12} />Restaurar padrão</button>
                 <button type="button" disabled={nameEditor.saving} onClick={() => setNameEditor({ open: false, value: '', saving: false })} className="rounded-xl border border-slate-200 px-3 py-2 text-[10px] font-bold text-slate-600 dark:border-slate-700 dark:text-slate-300">Cancelar</button>
                 <button type="button" disabled={nameEditor.saving} onClick={handleSaveAgentName} className="inline-flex min-w-24 items-center justify-center rounded-xl bg-blue-600 px-4 py-2 text-[10px] font-bold text-white hover:bg-blue-700 disabled:opacity-50">{nameEditor.saving ? <Loader2 size={13} className="animate-spin" /> : 'Salvar'}</button>
               </div>

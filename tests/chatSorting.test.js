@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   lastAgentMessageAt,
   lastCustomerMessageAt,
@@ -62,4 +63,14 @@ test('mensagem nova do cliente sobe ao inicio', () => {
 
   assert.deepEqual(sortChatsForMode([older, now], 'customer_recent', 'desc').map((item) => item.id), ['now', 'older']);
   assert.deepEqual(sortChatsForMode([now, older], 'customer_recent', 'asc').map((item) => item.id), ['older', 'now']);
+});
+
+test('configuracao usa toggle na engrenagem e nao ocupa o cabecalho da lista', () => {
+  const source = readFileSync(new URL('../client/src/pages/AgentWorkspace.jsx', import.meta.url), 'utf8');
+
+  assert.match(source, /role="switch"/);
+  assert.match(source, />Ordenação dinâmica</);
+  assert.match(source, />Critério</);
+  assert.match(source, />Prioridade</);
+  assert.doesNotMatch(source, /aria-label="Ordenacao dinamica dos clientes"/);
 });
