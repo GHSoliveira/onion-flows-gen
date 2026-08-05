@@ -17,5 +17,6 @@ sandbox/fake-whatsapp-media/
 sandbox/logs/
 sandbox/*.pid
 db.test-backup.json
+data/onion-preferences.json
 nul
 index.js.broken

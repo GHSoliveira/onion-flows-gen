@@ -104,6 +104,7 @@ const AppContent = () => {
   const isAgentRole = user?.role === 'AGENT';
   const [sidebarExpanded, setSidebarExpanded] = useState(() => !isAgentRole);
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('theme') === 'dark');
+  const preferencesHydratedUserRef = useRef('');
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const notifRef = useRef(null);
@@ -163,6 +164,25 @@ const AppContent = () => {
       localStorage.setItem('theme', 'light');
     }
   }, [darkMode]);
+
+  useEffect(() => {
+    if (!user?.id || preferencesHydratedUserRef.current === user.id) return;
+    preferencesHydratedUserRef.current = user.id;
+    apiRequest('/auth/me/preferences').then(async (response) => {
+      if (!response?.ok) return;
+      const data = await response.json().catch(() => ({}));
+      if (data?.preferences?.theme) setDarkMode(data.preferences.theme === 'dark');
+    }).catch(() => {});
+  }, [user?.id]);
+
+  const togglePersistedTheme = () => {
+    const nextDarkMode = !darkMode;
+    setDarkMode(nextDarkMode);
+    apiRequest('/auth/me/preferences', {
+      method: 'PUT',
+      body: JSON.stringify({ theme: nextDarkMode ? 'dark' : 'light' })
+    }).catch(() => toast.error('Tema aplicado, mas não foi salvo no arquivo local'));
+  };
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -584,7 +604,7 @@ const AppContent = () => {
               </span>
             )}
             <button
-              onClick={() => setDarkMode(!darkMode)}
+              onClick={togglePersistedTheme}
               className={`${isAgentWorkspace ? 'p-1.5' : 'p-2.5'} rounded-full text-slate-500 hover:bg-gray-100 dark:text-slate-400 dark:hover:bg-slate-700 transition-colors`}
             >
               {darkMode ? <Sun size={isAgentWorkspace ? 16 : 20} /> : <Moon size={isAgentWorkspace ? 16 : 20} />}

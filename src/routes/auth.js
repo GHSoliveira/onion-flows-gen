@@ -21,6 +21,7 @@ import {
   clearFailures as clearLoginFailures
 } from '../services/loginAttemptTracker.js';
 import { noteLogin } from '../services/loginAnomalyDetector.js';
+import { getLocalPreferences, saveLocalPreferences } from '../services/localPreferences.js';
 
 const router = express.Router();
 const HEARTBEAT_LAST_SEEN_MIN_MS = Number.parseInt(process.env.HEARTBEAT_LAST_SEEN_MIN_MS || '60000', 10);
@@ -139,6 +140,11 @@ router.patch('/me', authenticate, async (req, res) => {
       { id: req.user.id },
       { $set: { name, updatedAt: now } }
     );
+    await saveLocalPreferences({
+      tenantId: req.user.tenantId,
+      userId: req.user.id,
+      preferences: { name }
+    });
 
     const stored = await adapter.findOne(
       'users',
@@ -148,6 +154,33 @@ router.patch('/me', authenticate, async (req, res) => {
     const user = stored || { ...req.user, name, updatedAt: now };
     const { password: _pw, ...safe } = user;
     return res.json({ ok: true, user: safe });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/me/preferences', authenticate, async (req, res) => {
+  try {
+    const preferences = await getLocalPreferences({ tenantId: req.user.tenantId, userId: req.user.id });
+    return res.json({ ok: true, preferences: preferences || {} });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+router.put('/me/preferences', authenticate, async (req, res) => {
+  try {
+    const preferences = await saveLocalPreferences({
+      tenantId: req.user.tenantId,
+      userId: req.user.id,
+      preferences: {
+        ...(req.body?.name !== undefined ? { name: req.body.name } : {}),
+        ...(req.body?.theme !== undefined ? { theme: req.body.theme } : {}),
+        ...(req.body?.appearance !== undefined ? { appearance: req.body.appearance } : {}),
+        ...(req.body?.sort !== undefined ? { sort: req.body.sort } : {})
+      }
+    });
+    return res.json({ ok: true, preferences });
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }

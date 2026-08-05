@@ -1436,6 +1436,34 @@ const AgentWorkspace = () => {
     const savedAppearance = readChatAppearance(user?.id);
     setChatAppearance(savedAppearance);
     setAppearanceDraft(savedAppearance);
+    if (!user?.id) return undefined;
+    let cancelled = false;
+    apiRequest('/auth/me/preferences').then(async (response) => {
+      if (!response?.ok || cancelled) return;
+      const data = await response.json().catch(() => ({}));
+      if (cancelled) return;
+      const preferences = data?.preferences || {};
+      if (preferences.name && updateUser) updateUser({ name: preferences.name });
+      if (preferences.appearance) {
+        const normalized = normalizeChatAppearance(preferences.appearance);
+        localStorage.setItem(chatAppearanceStorageKey(user.id), JSON.stringify(normalized));
+        setChatAppearance(normalized);
+        setAppearanceDraft(normalized);
+      }
+      if (preferences.sort) {
+        const normalizedSort = {
+          enabled: preferences.sort.enabled === true,
+          mode: CHAT_SORT_OPTIONS.some((option) => option.value === preferences.sort.mode)
+            ? preferences.sort.mode
+            : DEFAULT_CHAT_SORT.mode,
+          direction: preferences.sort.direction === 'asc' ? 'asc' : 'desc',
+        };
+        localStorage.setItem(chatSortStorageKey(user.id), JSON.stringify(normalizedSort));
+        setChatSort(normalizedSort);
+        setChatSortDraft(normalizedSort);
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
   }, [user?.id]);
 
   useEffect(() => {
@@ -2821,6 +2849,14 @@ const AgentWorkspace = () => {
       localStorage.setItem(chatSortStorageKey(user?.id), JSON.stringify(normalizedSort));
       setChatSort(normalizedSort);
       setChatSortDraft(normalizedSort);
+      const preferencesResponse = await apiRequest('/auth/me/preferences', {
+        method: 'PUT',
+        body: JSON.stringify({ name, appearance: normalizedAppearance, sort: normalizedSort })
+      });
+      const preferencesData = preferencesResponse ? await preferencesResponse.json().catch(() => ({})) : null;
+      if (!preferencesResponse?.ok) {
+        throw new Error(preferencesData?.error || 'Falha ao salvar configuração local');
+      }
       toast.success('Preferências atualizadas');
       setNameEditor({ open: false, value: '', saving: false });
     } catch (error) {
@@ -5155,7 +5191,7 @@ const AgentWorkspace = () => {
               <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-800">
                 <div>
                   <h3 className="text-lg font-bold text-slate-900 dark:text-white">Seu espaço no Onion</h3>
-                  <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">A aparência fica somente neste navegador e neste usuário.</p>
+                  <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">Nome e aparência ficam salvos neste computador, mesmo após reiniciar o Onion.</p>
                 </div>
                 <button type="button" disabled={nameEditor.saving} onClick={() => setNameEditor({ open: false, value: '', saving: false })} className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100 text-slate-500 hover:bg-slate-200 disabled:opacity-50 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"><XIcon size={16} /></button>
               </div>
