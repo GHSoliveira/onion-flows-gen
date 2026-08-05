@@ -226,7 +226,7 @@ router.get('/:tenantId/chats', authenticate, authorize(TENANT_MEMBER_READ_ROLES)
   }
 });
 
-router.get('/:tenantId/settings', authenticate, authorize(TENANT_MEMBER_READ_ROLES), async (req, res) => {
+router.get('/:tenantId/settings', authenticate, authorize([...TENANT_MEMBER_READ_ROLES, 'AGENT']), async (req, res) => {
   try {
     const { tenantId } = req.params;
     if (req.user.role !== 'SUPER_ADMIN' && req.user.tenantId !== tenantId) {

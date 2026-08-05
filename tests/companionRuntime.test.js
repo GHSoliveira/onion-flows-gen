@@ -77,6 +77,18 @@ test('frontend local usa a origem atual e nao volta para a porta legada 3001', a
   assert.match(viteSource, /target: 'http:\/\/localhost:3101'/);
 });
 
+test('agente pode ler somente as configuracoes do proprio tenant usadas no workspace', async () => {
+  const root = path.resolve(import.meta.dirname, '..');
+  const tenantRoutes = await fs.readFile(path.join(root, 'src', 'routes', 'tenants.js'), 'utf8');
+
+  assert.match(
+    tenantRoutes,
+    /router\.get\('\/:tenantId\/settings', authenticate, authorize\(\[\.\.\.TENANT_MEMBER_READ_ROLES, 'AGENT'\]\)/
+  );
+  assert.match(tenantRoutes, /req\.user\.tenantId !== tenantId/);
+  assert.match(tenantRoutes, /router\.put\('\/:tenantId\/settings', authenticate, authorize\(\['ADMIN'\]\)/);
+});
+
 test('JSON local rejeita duplicatas concorrentes e mantém lookup indexado', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'onion-index-'));
   process.env.DB_ADAPTER = 'json';
