@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Genesys Onion Dev",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "Extensão isolada para testar o espelhamento Genesys para Onion.",
   "background": { "service_worker": "background.js" },
   "action": {

@@ -453,6 +453,13 @@ const messagesLookSame = (a, b) => {
     if (as.endsWith(bs) || bs.endsWith(as)) return true;
   }
 
+  // Placeholders como "[image]" se repetem quando o cliente envia várias
+  // mídias seguidas. IDs diferentes representam anexos distintos e nunca
+  // devem ser fundidos apenas pelo texto/timestamp.
+  const aHasMedia = Boolean(a.media || a.attachment || a.attachments?.length);
+  const bHasMedia = Boolean(b.media || b.attachment || b.attachments?.length);
+  if (aHasMedia || bHasMedia) return false;
+
   const sameContent = String(a.sender || '') === String(b.sender || '')
     && String(a.text || '').trim() === String(b.text || '').trim()
     && String(a.text || '').trim() !== '';

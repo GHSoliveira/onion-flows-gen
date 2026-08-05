@@ -123,6 +123,9 @@ test("link textual não vira documento e anexo real continua sendo mídia", asyn
   const descriptor = new Function(
     `${background.slice(start, end)}; return genesysMediaDescriptor;`
   )();
+  const descriptors = new Function(
+    `${background.slice(start, end)}; return genesysMediaDescriptors;`
+  )();
 
   assert.equal(descriptor({
     normalizedMessage: {
@@ -161,6 +164,16 @@ test("link textual não vira documento e anexo real continua sendo mídia", asyn
   });
   assert.equal(media?.fileName, "foto.jpg");
   assert.equal(media?.mimeType, "image/jpeg");
+
+  const album = descriptors({
+    normalizedMessage: {
+      attachments: [
+        { type: "attachment", id: "media-1", url: "https://api-downloads.sae1.pure.cloud/media/1.jpg", mimeType: "image/jpeg", fileName: "1.jpg" },
+        { type: "attachment", id: "media-2", url: "https://api-downloads.sae1.pure.cloud/media/2.jpg", mimeType: "image/jpeg", fileName: "2.jpg" }
+      ]
+    }
+  });
+  assert.deepEqual(album.map((item) => item.fileName), ["1.jpg", "2.jpg"]);
 });
 test("envio normal usa o par salvo e só consulta o roster como recuperação", async () => {
   const background = await loadBackground();

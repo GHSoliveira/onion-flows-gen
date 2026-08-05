@@ -1,6 +1,6 @@
 importScripts("external-status.js", "lib/socket.io.min.js");
 
-const EXTENSION_BUILD = "2026.08.05.3";
+const EXTENSION_BUILD = "2026.08.05.4";
 const SETTINGS_KEY = "onionDevSettings";
 const AUTH_KEY = "onionDevAuth";
 const COMMUNICATIONS_KEY = "onionDevCommunications";
@@ -3397,7 +3397,7 @@ function isExplicitGenesysMediaReference(value, url, mimeType, fileName, kind) {
   if (!urlSaysDownload && !mimeSaysMedia && !fileName) return false;
   return Boolean(kindSaysMedia || mimeSaysMedia || fileName || urlSaysDownload);
 }
-function genesysMediaDescriptor(item) {
+function genesysMediaDescriptors(item) {
   const roots = [
     item?.normalizedMessage?.content,
     item?.normalizedMessage?.attachments,
@@ -3408,6 +3408,8 @@ function genesysMediaDescriptor(item) {
   ];
   const queue = roots.flat().filter(Boolean);
   const visited = new Set();
+  const descriptors = [];
+  const descriptorKeys = new Set();
   while (queue.length) {
     const value = queue.shift();
     if (!value || typeof value !== "object" || visited.has(value)) continue;
@@ -3438,20 +3440,29 @@ function genesysMediaDescriptor(item) {
       url
       && isExplicitGenesysMediaReference(value, url, mimeType, fileName, kind)
     ) {
-      return {
+      const descriptor = {
         url,
         mimeType: mimeType.includes("/") ? mimeType : "",
         fileName,
         type: kind,
         mediaId: String(value.id || value.mediaId || "")
       };
+      const descriptorKey = descriptor.mediaId || `${descriptor.url}|${descriptor.fileName}|${descriptor.mimeType}`;
+      if (!descriptorKeys.has(descriptorKey)) {
+        descriptorKeys.add(descriptorKey);
+        descriptors.push(descriptor);
+      }
     }
     for (const child of Object.values(value)) {
       if (child && typeof child === "object") queue.push(child);
     }
   }
-  return null;
-}function arrayBufferToBase64(buffer) {
+  return descriptors;
+}
+function genesysMediaDescriptor(item) {
+  return genesysMediaDescriptors(item)[0] || null;
+}
+function arrayBufferToBase64(buffer) {
   const bytes = new Uint8Array(buffer);
   let binary = "";
   const chunkSize = 0x8000;
@@ -3559,15 +3570,16 @@ async function messageData(item, purposeByMessage) {
         : "agent";
   const text = String(item?.normalizedMessage?.text || item?.textBody || item?.text || "").trim();
   const timestamp = item?.timestamp || item?.createdTime || item?.time || Date.now();
-  const descriptor = genesysMediaDescriptor(item);
-  let media = null;
+  const descriptors = genesysMediaDescriptors(item);
+  const mediaItems = [];
   let mediaHydrationFailed = false;
-  if (descriptor) {
+  for (let index = 0; index < descriptors.length; index += 1) {
     try {
-      media = await scheduleMediaHydration(() => hydrateGenesysMedia(descriptor));
+      const hydrated = await scheduleMediaHydration(() => hydrateGenesysMedia(descriptors[index]));
+      if (hydrated) mediaItems.push(hydrated);
     } catch (error) {
       mediaHydrationFailed = true;
-      log("error", "Falha ao baixar mídia Genesys", `${id.slice(0, 8)} · ${error.message}`);
+      log("error", "Falha ao baixar mídia Genesys", `${id.slice(0, 8)} · anexo ${index + 1} · ${error.message}`);
     }
   }
   return {
@@ -3579,10 +3591,22 @@ async function messageData(item, purposeByMessage) {
     senderName: String(identity?.participantName || ""),
     senderUserId: String(identity?.userId || ""),
     text,
-    media,
+    media: mediaItems[0] || null,
+    additionalMedia: mediaItems.slice(1),
     mediaHydrationFailed,
     ts: new Date(timestamp).getTime() || Date.now()
   };
+}
+function expandGenesysMessageMedia(message) {
+  if (!message) return [];
+  const { additionalMedia = [], ...primary } = message;
+  return [primary, ...additionalMedia.map((media, index) => ({
+    ...primary,
+    id: `${primary.id}:media:${media.mediaId || index + 2}`,
+    text: media.caption || "",
+    media,
+    mediaHydrationFailed: false
+  }))];
 }
 function genesysAttributeValue(attributes, candidates) {
   if (!attributes || typeof attributes !== "object") return "";
@@ -3925,9 +3949,9 @@ async function syncConversationFromNotification(conversationId) {
       );
       entities.push(...(Array.isArray(bulk) ? bulk : (bulk?.entities || [])));
     }
-    const hydratedItems = await Promise.all(
+    const hydratedItems = (await Promise.all(
       entities.map((item) => messageData(item, purposeByMessage))
-    );
+    )).flatMap(expandGenesysMessageMedia);
     const failedMediaIds = new Set(
       hydratedItems
         .filter((item) => item.mediaHydrationFailed)
@@ -4107,7 +4131,8 @@ async function reloadConversationFromGenesys(next, payload = {}) {
         { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(chunk) }
       );
       const entities = Array.isArray(bulk) ? bulk : (bulk?.entities || []);
-      const hydrated = await Promise.all(entities.map((item) => messageData(item, purposeByMessage)));
+      const hydrated = (await Promise.all(entities.map((item) => messageData(item, purposeByMessage))))
+        .flatMap(expandGenesysMessageMedia);
       messages.push(...hydrated.filter((item) => item.id && (item.text || item.media)));
     }
     syncConversationDocument(conversationId, messages);
@@ -4171,7 +4196,7 @@ async function backfillConversationFromGenesys(conversationId, generation, detai
     const entities = Array.isArray(bulk) ? bulk : (bulk?.entities || []);
     const messages = (await Promise.all(
       entities.map((item) => messageData(item, purposeByMessage))
-    )).filter((item) => item.id && (item.text || item.media));
+    )).flatMap(expandGenesysMessageMedia).filter((item) => item.id && (item.text || item.media));
     syncConversationDocument(conversationId, messages);
     if (!messages.length) { log("warn", "Backfill sem texto aproveitável", conversationId.slice(0, 8)); return; }
     handleMessages({ conversationId, messages });
