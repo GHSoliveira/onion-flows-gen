@@ -5025,9 +5025,9 @@ const AgentWorkspace = () => {
                           aria-checked={chatSortDraft.enabled}
                           aria-label="Ativar ordenação dinâmica"
                           onClick={() => setChatSortDraft((previous) => ({ ...previous, enabled: !previous.enabled }))}
-                          className={`relative h-6 w-11 shrink-0 rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 dark:focus:ring-offset-slate-900 ${chatSortDraft.enabled ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-600'}`}
+                          className={`relative h-7 w-12 shrink-0 overflow-hidden rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 dark:focus:ring-offset-slate-900 ${chatSortDraft.enabled ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-600'}`}
                         >
-                          <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200 ${chatSortDraft.enabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                          <span className={`absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200 ${chatSortDraft.enabled ? 'translate-x-5' : 'translate-x-0'}`} />
                         </button>
                       </div>
 
