@@ -689,6 +689,20 @@ body {
   will-change: transform, opacity;
 }
 
+.agent-workspace.ui-performance-mode .ui-message-enter,
+.agent-workspace.ui-performance-mode .ui-card-hover,
+.agent-workspace.ui-performance-mode .ui-mobile-chat-enter,
+.agent-workspace.ui-performance-mode .ui-mobile-list-enter {
+  animation: none !important;
+  will-change: auto;
+}
+
+.agent-workspace.ui-performance-mode .backdrop-blur,
+.agent-workspace.ui-performance-mode .backdrop-blur-sm,
+.agent-workspace.ui-performance-mode .backdrop-blur-md {
+  backdrop-filter: none !important;
+}
+
 .node-config-modal-surface {
   animation: nodeConfigModalReveal 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
   transform-origin: center;

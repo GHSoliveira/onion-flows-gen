@@ -8,5 +8,5 @@ $env:VITE_SOCKET_URL = "http://127.0.0.1:$($env:PORT)"
 $env:VITE_NODE_ENV = 'sandbox'
 
 Set-Location -LiteralPath (Join-Path $Root 'client')
-& .\node_modules\.bin\vite.cmd --host 127.0.0.1 --port 30999
+& npm.cmd run build
 exit $LASTEXITCODE

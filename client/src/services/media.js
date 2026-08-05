@@ -1,12 +1,5 @@
 import { apiRequest } from './api';
 
-const fileToDataUrl = (file) => new Promise((resolve, reject) => {
-  const reader = new FileReader();
-  reader.onload = () => resolve(String(reader.result || ''));
-  reader.onerror = () => reject(new Error('Falha ao ler arquivo'));
-  reader.readAsDataURL(file);
-});
-
 export const listMediaAssets = async () => {
   const res = await apiRequest('/media/assets?limit=500');
   if (!res || !res.ok) return [];
@@ -15,14 +8,15 @@ export const listMediaAssets = async () => {
 };
 
 export const uploadMediaAsset = async (file) => {
-  const dataUrl = await fileToDataUrl(file);
-  const res = await apiRequest('/media/assets', {
+  const mimeType = String(file?.type || '').trim().toLowerCase();
+  if (!file || !mimeType) throw new Error('Tipo do arquivo não identificado');
+  const res = await apiRequest('/media/assets/stream', {
     method: 'POST',
-    body: JSON.stringify({
-      filename: file.name,
-      mimeType: file.type,
-      dataUrl
-    })
+    headers: {
+      'Content-Type': mimeType,
+      'X-Onion-Filename': encodeURIComponent(file.name || 'arquivo')
+    },
+    body: file
   });
   if (!res || !res.ok) {
     const error = res ? await res.json().catch(() => ({})) : {};

@@ -48,8 +48,13 @@ const inferTypeByUrl = (value) => {
 const extractFileNameFromUrl = (value) => {
   const url = String(value || '').trim();
   if (!url) return null;
-  const cleanUrl = url.split('?')[0].split('#')[0];
-  const lastPart = cleanUrl.split('/').pop() || '';
+  let pathname = url;
+  try {
+    pathname = new URL(url, 'http://localhost').pathname;
+  } catch {
+    pathname = url.split('?')[0].split('#')[0];
+  }
+  const lastPart = pathname.split('/').pop() || '';
   if (!lastPart || !/\.[a-z0-9]{2,8}$/i.test(lastPart)) return null;
   try {
     return decodeURIComponent(lastPart);
@@ -78,10 +83,8 @@ export const normalizeMediaPayload = (message) => {
     media.url
     || media.mediaUrl
     || message?.mediaUrl
-    || message?.url
     || message?.fileUrl
     || message?.meta?.mediaUrl
-    || message?.meta?.url
     || message?.attachmentUrl
     || null
   );

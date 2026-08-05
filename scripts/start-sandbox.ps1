@@ -59,9 +59,21 @@ foreach ($logPath in @($BackendOut, $BackendErr, $FrontendOut, $FrontendErr)) {
 $backendScript = Join-Path $PSScriptRoot 'run-backend-sandbox.ps1'
 $frontendScript = Join-Path $PSScriptRoot 'run-frontend-sandbox.ps1'
 $backend = $null
-$frontend = $null
 
 try {
+  Write-Host '[SANDBOX] Compilando frontend local...'
+  $frontendBuild = Start-Process -FilePath 'powershell.exe' `
+    -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$frontendScript`"" `
+    -WorkingDirectory $Root `
+    -WindowStyle Hidden `
+    -Wait `
+    -PassThru `
+    -RedirectStandardOutput $FrontendOut `
+    -RedirectStandardError $FrontendErr
+  if ($frontendBuild.ExitCode -ne 0) {
+    throw "Build do frontend falhou (codigo $($frontendBuild.ExitCode))."
+  }
+
   Write-Host '[SANDBOX] Iniciando backend...'
   $backend = Start-Process -FilePath 'powershell.exe' `
     -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$backendScript`"" `
@@ -78,25 +90,15 @@ try {
     -Process $backend `
     -ExpectedText '"status"\s*:\s*"ok"'
 
-  Write-Host '[SANDBOX] Iniciando frontend...'
-  $frontend = Start-Process -FilePath 'powershell.exe' `
-    -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$frontendScript`"" `
-    -WorkingDirectory $Root `
-    -WindowStyle Hidden `
-    -PassThru `
-    -RedirectStandardOutput $FrontendOut `
-    -RedirectStandardError $FrontendErr
-  Set-Content -LiteralPath (Join-Path $SandboxDir 'frontend.pid') -Value $frontend.Id
-
   Wait-SandboxEndpoint `
     -Name 'Frontend' `
-    -Url 'http://127.0.0.1:30999' `
-    -Process $frontend `
+    -Url 'http://127.0.0.1:3101' `
+    -Process $backend `
     -ExpectedText '<div id="root"'
 
   Write-Host '[SANDBOX] Backend:  http://127.0.0.1:3101'
   Write-Host '[SANDBOX] Health:   http://127.0.0.1:3101/health'
-  Write-Host '[SANDBOX] Frontend: http://127.0.0.1:30999'
+  Write-Host '[SANDBOX] Frontend: http://127.0.0.1:3101'
   Write-Host '[SANDBOX] Login super-admin: admin / sandbox123'
   Write-Host '[SANDBOX] Login agent:       agent / sandbox123'
   Write-Host "[SANDBOX] Logs: $LogsDir"

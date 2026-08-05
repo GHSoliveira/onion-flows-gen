@@ -1,18 +1,15 @@
 import express from 'express';
 import path from 'path';
 import { promises as fs } from 'fs';
-import { fileURLToPath } from 'url';
 import adapter from '../../db/DatabaseAdapter.js';
 import { authenticate } from '../middleware/auth.js';
 import { authorize } from '../middleware/authorization.js';
 import { requireTenant } from '../middleware/tenant.js';
 import { generateId } from '../utils/helpers.js';
 import { validateUpload } from '../utils/fileType.js';
+import { uploadsRoot, scheduleTransientMediaDeletion } from '../services/mediaStorage.js';
 
 const router = express.Router();
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const uploadsRoot = path.resolve(__dirname, '../../uploads');
 const DEFAULT_MAX_UPLOAD_BYTES = 70 * 1024 * 1024;
 const MAX_UPLOAD_BYTES = Number.parseInt(process.env.MEDIA_MAX_UPLOAD_BYTES || `${DEFAULT_MAX_UPLOAD_BYTES}`, 10);
 
@@ -60,6 +57,24 @@ const resolvePublicUrl = (req, tenantId, fileName) => {
   return `${base}/uploads/${encodeURIComponent(tenantId)}/${encodeURIComponent(fileName)}`;
 };
 
+const createMediaAsset = async ({ req, tenantId, fileName, originalName, mimeType, size }) => {
+  const asset = {
+    id: generateId('asset'),
+    tenantId,
+    fileName,
+    originalName,
+    mimeType,
+    size,
+    contentLengthBytes: size,
+    url: resolvePublicUrl(req, tenantId, fileName),
+    createdAt: new Date().toISOString(),
+    createdBy: req.user?.id || null
+  };
+  if (!adapter.db) await adapter.init();
+  await adapter.db.collection('mediaAssets').insertOne(asset);
+  return asset;
+};
+
 router.get('/assets', authenticate, requireTenant, async (req, res) => {
   try {
     const tenantId = req.tenantId;
@@ -86,6 +101,88 @@ router.get('/assets', authenticate, requireTenant, async (req, res) => {
     res.json({ items });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Upload binário direto: o browser envia o File como body e o servidor grava
+// por chunks. Evita FileReader/base64 e as cópias de memória de ~2,3x do JSON.
+router.post('/assets/stream', authenticate, authorize(['ADMIN', 'SUPER_ADMIN', 'AGENT']), requireTenant, async (req, res) => {
+  const tenantId = req.tenantId;
+  const encodedName = String(req.headers['x-onion-filename'] || 'arquivo');
+  let decodedName = encodedName;
+  try { decodedName = decodeURIComponent(encodedName); } catch (_) {}
+  const originalName = sanitizeFilename(decodedName);
+  const declaredMime = normalizeMimeType(req.headers['content-type']);
+  const contentLength = Number.parseInt(req.headers['content-length'] || '0', 10);
+
+  if (!declaredMime || declaredMime === 'application/octet-stream') {
+    return res.status(400).json({ error: 'Content-Type do arquivo obrigatorio' });
+  }
+  if (Number.isFinite(contentLength) && contentLength > MAX_UPLOAD_BYTES) {
+    return res.status(413).json({ error: `Arquivo excede limite de ${Math.floor(MAX_UPLOAD_BYTES / (1024 * 1024))}MB` });
+  }
+
+  const extension = getExtension(originalName, declaredMime);
+  const fileName = `${generateId('media')}${extension}`;
+  const safeTenantId = String(tenantId).replace(/[^a-zA-Z0-9_-]/g, '');
+  const tenantDir = path.join(uploadsRoot, safeTenantId);
+  const filePath = path.resolve(tenantDir, fileName);
+  const rootPath = path.resolve(uploadsRoot);
+  if (!filePath.startsWith(`${rootPath}${path.sep}`)) {
+    return res.status(400).json({ error: 'Path invalido' });
+  }
+
+  let handle = null;
+  let totalBytes = 0;
+  let signature = Buffer.alloc(0);
+  try {
+    await fs.mkdir(tenantDir, { recursive: true });
+    handle = await fs.open(filePath, 'wx');
+    for await (const rawChunk of req) {
+      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
+      totalBytes += chunk.length;
+      if (totalBytes > MAX_UPLOAD_BYTES) {
+        const error = new Error('upload_too_large');
+        error.code = 'UPLOAD_TOO_LARGE';
+        throw error;
+      }
+      if (signature.length < 64) {
+        signature = Buffer.concat([signature, chunk.subarray(0, 64 - signature.length)]);
+      }
+      await handle.write(chunk);
+    }
+    await handle.close();
+    handle = null;
+
+    if (!totalBytes) {
+      await fs.unlink(filePath).catch(() => {});
+      return res.status(400).json({ error: 'Arquivo vazio' });
+    }
+    const validation = validateUpload(signature, declaredMime);
+    if (!validation.ok) {
+      await fs.unlink(filePath).catch(() => {});
+      return res.status(400).json({ error: validation.reason });
+    }
+
+    if (['1', 'true', 'yes', 'on'].includes(String(process.env.COMPANION_MODE || '').trim().toLowerCase())) {
+      scheduleTransientMediaDeletion(filePath);
+    }
+    const asset = await createMediaAsset({
+      req,
+      tenantId,
+      fileName,
+      originalName,
+      mimeType: validation.detected,
+      size: totalBytes
+    });
+    return res.status(201).json(asset);
+  } catch (error) {
+    await handle?.close().catch(() => {});
+    await fs.unlink(filePath).catch(() => {});
+    if (error?.code === 'UPLOAD_TOO_LARGE') {
+      return res.status(413).json({ error: `Arquivo excede limite de ${Math.floor(MAX_UPLOAD_BYTES / (1024 * 1024))}MB` });
+    }
+    return res.status(500).json({ error: error?.message || 'Falha no upload' });
   }
 });
 
@@ -132,20 +229,17 @@ router.post('/assets', authenticate, authorize(['ADMIN', 'SUPER_ADMIN', 'AGENT']
     await fs.mkdir(tenantDir, { recursive: true });
     await fs.writeFile(filePath, buffer);
 
-    const asset = {
-      id: generateId('asset'),
+    if (['1', 'true', 'yes', 'on'].includes(String(process.env.COMPANION_MODE || '').trim().toLowerCase())) {
+      scheduleTransientMediaDeletion(filePath);
+    }
+    const asset = await createMediaAsset({
+      req,
       tenantId,
       fileName,
       originalName,
       mimeType: verifiedMime,
-      size: buffer.length,
-      url: resolvePublicUrl(req, tenantId, fileName),
-      createdAt: new Date().toISOString(),
-      createdBy: req.user?.id || null
-    };
-
-    if (!adapter.db) await adapter.init();
-    await adapter.db.collection('mediaAssets').insertOne(asset);
+      size: buffer.length
+    });
     res.status(201).json(asset);
   } catch (error) {
     res.status(500).json({ error: error.message });

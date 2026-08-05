@@ -5,6 +5,15 @@ import { MongoClient } from 'mongodb';
 
 const truthy = (value) => ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
 const clone = (value) => JSON.parse(JSON.stringify(value ?? null));
+const parseCsvSet = (value) => new Set(
+  String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+);
+const expandLocalPath = (value) => String(value || '')
+  .replace(/%LOCALAPPDATA%/gi, process.env.LOCALAPPDATA || '')
+  .replace(/\$\{LOCALAPPDATA\}/g, process.env.LOCALAPPDATA || '');
 const slowQueryEnabled = () => truthy(process.env.SLOW_QUERY_LOG_ENABLED);
 const slowQueryMs = () => {
   const parsed = Number.parseInt(process.env.SLOW_QUERY_MS || '500', 10);
@@ -232,7 +241,10 @@ class JsonCollection {
   }
 
   async findOne(query = {}, options = {}) {
-    const doc = this.docs.find((item) => matchesQuery(item, query));
+    const indexed = this.adapter.findIndexed(this.name, query);
+    const doc = indexed.supported
+      ? (indexed.doc && matchesQuery(indexed.doc, query) ? indexed.doc : null)
+      : this.docs.find((item) => matchesQuery(item, query));
     return doc ? applyProjection(doc, options?.projection) : null;
   }
 
@@ -241,8 +253,11 @@ class JsonCollection {
   }
 
   async insertOne(doc) {
-    this.docs.push(clone(doc));
-    await this.adapter.flush();
+    const nextDoc = clone(doc);
+    this.adapter.assertUnique(this.name, nextDoc);
+    this.docs.push(nextDoc);
+    this.adapter.indexDocument(this.name, nextDoc);
+    await this.adapter.flush(this.name);
     return { acknowledged: true, insertedId: doc?.id || null };
   }
 
@@ -254,12 +269,28 @@ class JsonCollection {
       this.docs.push(doc);
     }
     if (!doc) return { acknowledged: true, matchedCount: 0, modifiedCount: 0, upsertedCount: 0 };
+    const previous = clone(doc);
     applyUpdate(doc, update);
-    await this.adapter.flush();
+    try {
+      this.adapter.assertUnique(this.name, doc, doc);
+      this.adapter.rebuildIndexes(this.name);
+    } catch (error) {
+      if (!matched) {
+        const index = this.docs.indexOf(doc);
+        if (index >= 0) this.docs.splice(index, 1);
+      } else {
+        Object.keys(doc).forEach((key) => delete doc[key]);
+        Object.assign(doc, previous);
+      }
+      this.adapter.rebuildIndexes(this.name);
+      throw error;
+    }
+    await this.adapter.flush(this.name);
     return { acknowledged: true, matchedCount: matched ? 1 : 0, modifiedCount: 1, upsertedCount: matched ? 0 : 1 };
   }
 
   async updateMany(filter, update) {
+    const previousDocs = clone(this.docs);
     let modifiedCount = 0;
     for (const doc of this.docs) {
       if (matchesQuery(doc, filter)) {
@@ -267,7 +298,17 @@ class JsonCollection {
         modifiedCount += 1;
       }
     }
-    if (modifiedCount) await this.adapter.flush();
+    if (modifiedCount) {
+      try {
+        this.adapter.validateUniqueDocuments(this.name, this.docs);
+        this.adapter.rebuildIndexes(this.name);
+      } catch (error) {
+        this.adapter.data[this.name] = previousDocs;
+        this.adapter.rebuildIndexes(this.name);
+        throw error;
+      }
+      await this.adapter.flush(this.name);
+    }
     return { acknowledged: true, matchedCount: modifiedCount, modifiedCount };
   }
 
@@ -275,7 +316,8 @@ class JsonCollection {
     const index = this.docs.findIndex((doc) => matchesQuery(doc, filter));
     if (index === -1) return { acknowledged: true, deletedCount: 0 };
     this.docs.splice(index, 1);
-    await this.adapter.flush();
+    this.adapter.rebuildIndexes(this.name);
+    await this.adapter.flush(this.name);
     return { acknowledged: true, deletedCount: 1 };
   }
 
@@ -283,7 +325,10 @@ class JsonCollection {
     const before = this.docs.length;
     this.adapter.data[this.name] = this.docs.filter((doc) => !matchesQuery(doc, filter));
     const deletedCount = before - this.adapter.data[this.name].length;
-    if (deletedCount) await this.adapter.flush();
+    if (deletedCount) {
+      this.adapter.rebuildIndexes(this.name);
+      await this.adapter.flush(this.name);
+    }
     return { acknowledged: true, deletedCount };
   }
 
@@ -314,16 +359,29 @@ class JsonCollection {
   }
 
   async bulkWrite(operations = []) {
+    const working = clone(this.docs);
+    let modifiedCount = 0;
     for (const operation of operations) {
       if (operation.updateOne) {
-        await this.updateOne(
-          operation.updateOne.filter,
-          operation.updateOne.update,
-          { upsert: operation.updateOne.upsert }
-        );
+        const { filter = {}, update = {}, upsert = false } = operation.updateOne;
+        let doc = working.find((item) => matchesQuery(item, filter));
+        if (!doc && upsert) {
+          doc = clone(filter);
+          working.push(doc);
+        }
+        if (doc) {
+          applyUpdate(doc, update);
+          modifiedCount += 1;
+        }
       }
     }
-    return { acknowledged: true };
+    if (modifiedCount) {
+      this.adapter.validateUniqueDocuments(this.name, working);
+      this.adapter.data[this.name] = working;
+      this.adapter.rebuildIndexes(this.name);
+      await this.adapter.flush(this.name);
+    }
+    return { acknowledged: true, modifiedCount };
   }
 }
 
@@ -342,20 +400,134 @@ class JsonAdapter {
     this.db = null;
     this.data = {};
     this.filePath = null;
+    this.ephemeralCollections = parseCsvSet(process.env.JSON_EPHEMERAL_COLLECTIONS);
+    this.flushChain = Promise.resolve();
+    this.uniqueIndexDefinitions = {
+      activeChats: [
+        ['id'],
+        ['tenantId', 'genesysConvId']
+      ],
+      chatMessages: [
+        ['tenantId', 'chatId', 'messageId'],
+        ['tenantId', 'providerMessageId']
+      ],
+      chatEvents: [['tenantId', 'id']]
+    };
+    this.indexes = new Map();
   }
 
   async init() {
     if (this.db) return;
-    this.filePath = path.resolve(process.env.JSON_DB_PATH || './sandbox/data/db.json');
+    this.filePath = path.resolve(expandLocalPath(process.env.JSON_DB_PATH || './sandbox/data/db.json'));
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
     if (!fs.existsSync(this.filePath)) fs.writeFileSync(this.filePath, '{}\n', 'utf8');
     this.data = JSON.parse(fs.readFileSync(this.filePath, 'utf8') || '{}');
+    for (const name of this.ephemeralCollections) this.data[name] = [];
+    for (const name of Object.keys(this.uniqueIndexDefinitions)) this.rebuildIndexes(name);
     this.db = new JsonDb(this);
     console.log(`[DB] JSON adapter ativo em ${this.filePath}`);
+    if (this.ephemeralCollections.size) {
+      console.log(`[DB] Colecoes efemeras: ${[...this.ephemeralCollections].join(', ')}`);
+    }
   }
 
-  async flush() {
-    fs.writeFileSync(this.filePath, `${JSON.stringify(this.data, null, 2)}\n`, 'utf8');
+  isEphemeralCollection(name) {
+    return Boolean(name && this.ephemeralCollections.has(name));
+  }
+
+  indexKey(fields, doc) {
+    const values = fields.map((field) => getByPath(doc, field));
+    if (values.some((value) => value === undefined || value === null || value === '')) return null;
+    return values.map((value) => String(value)).join('\u001f');
+  }
+
+  collectionIndexes(name) {
+    if (!this.indexes.has(name)) {
+      this.indexes.set(name, (this.uniqueIndexDefinitions[name] || []).map((fields) => ({
+        fields,
+        values: new Map()
+      })));
+    }
+    return this.indexes.get(name);
+  }
+
+  indexDocument(name, doc) {
+    for (const index of this.collectionIndexes(name)) {
+      const key = this.indexKey(index.fields, doc);
+      if (key && !index.values.has(key)) index.values.set(key, doc);
+    }
+  }
+
+  rebuildIndexes(name) {
+    const indexes = this.collectionIndexes(name);
+    for (const index of indexes) index.values.clear();
+    for (const doc of (Array.isArray(this.data[name]) ? this.data[name] : [])) this.indexDocument(name, doc);
+  }
+
+  assertUnique(name, doc, excludeDoc = null) {
+    for (const index of this.collectionIndexes(name)) {
+      const key = this.indexKey(index.fields, doc);
+      if (!key) continue;
+      const existing = index.values.get(key);
+      if (existing && existing !== excludeDoc) {
+        const error = new Error(`Duplicate key ${name}.${index.fields.join('_')}`);
+        error.code = 11000;
+        throw error;
+      }
+    }
+  }
+
+  validateUniqueDocuments(name, docs) {
+    for (const fields of (this.uniqueIndexDefinitions[name] || [])) {
+      const seen = new Set();
+      for (const doc of docs) {
+        const key = this.indexKey(fields, doc);
+        if (!key) continue;
+        if (seen.has(key)) {
+          const error = new Error(`Duplicate key ${name}.${fields.join('_')}`);
+          error.code = 11000;
+          throw error;
+        }
+        seen.add(key);
+      }
+    }
+  }
+
+  findIndexed(name, query = {}) {
+    for (const index of this.collectionIndexes(name)) {
+      const exact = Object.fromEntries(index.fields.map((field) => [field, getByPath(query, field)]));
+      if (Object.values(exact).some((value) => value === undefined || value === null || typeof value === 'object')) continue;
+      const key = this.indexKey(index.fields, exact);
+      return { supported: true, doc: key ? (index.values.get(key) || null) : null };
+    }
+    return { supported: false, doc: null };
+  }
+
+  persistableSnapshot() {
+    return Object.fromEntries(
+      Object.entries(this.data).filter(([name]) => !this.ephemeralCollections.has(name))
+    );
+  }
+
+  async flush(collectionName = null) {
+    if (this.isEphemeralCollection(collectionName)) return;
+
+    const write = this.flushChain
+      .catch(() => {})
+      .then(async () => {
+        const contents = `${JSON.stringify(this.persistableSnapshot(), null, 2)}\n`;
+        const tempPath = `${this.filePath}.${process.pid}.tmp`;
+        await fs.promises.writeFile(tempPath, contents, 'utf8');
+        try {
+          await fs.promises.rename(tempPath, this.filePath);
+        } catch (error) {
+          if (!['EEXIST', 'EPERM'].includes(error?.code)) throw error;
+          await fs.promises.copyFile(tempPath, this.filePath);
+          await fs.promises.unlink(tempPath).catch(() => {});
+        }
+      });
+    this.flushChain = write;
+    return write;
   }
 
   async collection(name) {
@@ -412,8 +584,11 @@ class JsonAdapter {
   }
 
   async saveCollection(name, data) {
-    this.data[name] = clone(data || []);
-    await this.flush();
+    const next = clone(data || []);
+    this.validateUniqueDocuments(name, next);
+    this.data[name] = next;
+    this.rebuildIndexes(name);
+    await this.flush(name);
     return true;
   }
 

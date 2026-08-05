@@ -16,7 +16,7 @@ import {
   User, MessageCircle, Clock, Play, XCircle, Send, Headset, Star, Check, CheckCheck,
   ArrowLeft, Paperclip, Info, MessageSquareText, Loader2, FileText, Image as ImageIcon, Video, AudioLines,
   PanelRightClose, PanelRightOpen, ArrowRightLeft, CornerUpLeft, X as XIcon, Settings, Pencil, Trash2,
-  PhoneCall, Copy, RefreshCw, BrainCircuit, Database, ClipboardList, Router
+  PhoneCall, Copy, RefreshCw, BrainCircuit, Database, ClipboardList, Router, Activity, TriangleAlert
 } from 'lucide-react';
 import OnionAiIcon from '../components/OnionAiIcon';
 import toast from 'react-hot-toast';
@@ -116,7 +116,8 @@ const compressChatBackground = (file) => new Promise((resolve, reject) => {
   };
   reader.readAsDataURL(file);
 });
-const SHARED_CLOCK_INTERVAL_MS = 1000;
+const SHARED_CLOCK_INTERVAL_MS = 5000;
+const MESSAGE_WINDOW_SIZE = 80;
 let sharedClockNow = Date.now();
 let sharedClockTimer = null;
 const sharedClockListeners = new Set();
@@ -454,11 +455,33 @@ const dedupeMessageList = (list) => {
   return out.sort((a, b) => parseMessageTimeLoose(a?.timestamp) - parseMessageTimeLoose(b?.timestamp));
 };
 
-/** Mantém a ordem atual (ou salva); so adiciona chats novos no fim. Nao reordena por mensagem. */
+const chatArrivalTimestamp = (chat) => {
+  const candidates = [
+    chat?.assignedAt,
+    chat?.genesysAssignedAt,
+    chat?.waitingSince,
+    chat?.startTime,
+    chat?.startedAt,
+    chat?.genesysStartedAt,
+    chat?.createdAt,
+  ];
+  for (const value of candidates) {
+    const timestamp = parseMessageTimeLoose(value);
+    if (timestamp) return timestamp;
+  }
+  return 0;
+};
+
+/** Mantém a ordem atual (inclusive drag manual); cards recém-chegados entram no topo. */
 const mergeChatsPreserveOrder = (prevList, nextList, storedOrder = []) => {
   const nextById = new Map();
+  const nextIndexById = new Map();
   (Array.isArray(nextList) ? nextList : []).forEach((chat) => {
-    if (chat?.id) nextById.set(String(chat.id), chat);
+    if (chat?.id) {
+      const id = String(chat.id);
+      nextById.set(id, chat);
+      nextIndexById.set(id, nextIndexById.size);
+    }
   });
 
   const prevIds = (Array.isArray(prevList) ? prevList : [])
@@ -467,6 +490,7 @@ const mergeChatsPreserveOrder = (prevList, nextList, storedOrder = []) => {
   const baseOrder = prevIds.length > 0 ? prevIds : (Array.isArray(storedOrder) ? storedOrder : []);
   const used = new Set();
   const result = [];
+  const newcomers = [];
 
   baseOrder.forEach((id) => {
     if (!nextById.has(id) || used.has(id)) return;
@@ -476,11 +500,17 @@ const mergeChatsPreserveOrder = (prevList, nextList, storedOrder = []) => {
 
   nextById.forEach((chat, id) => {
     if (used.has(id)) return;
-    result.push(chat);
+    newcomers.push(chat);
     used.add(id);
   });
 
-  return result;
+  newcomers.sort((left, right) => {
+    const byArrival = chatArrivalTimestamp(right) - chatArrivalTimestamp(left);
+    if (byArrival !== 0) return byArrival;
+    return (nextIndexById.get(String(right?.id)) || 0) - (nextIndexById.get(String(left?.id)) || 0);
+  });
+
+  return [...newcomers, ...result];
 };
 
 const AgentWorkspace = () => {
@@ -501,6 +531,7 @@ const AgentWorkspace = () => {
   const [aiImprovementUndo, setAiImprovementUndo] = useState(null);
   const [replyingTo, setReplyingTo] = useState(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState(null);
+  const [visibleMessageLimit, setVisibleMessageLimit] = useState(MESSAGE_WINDOW_SIZE);
   const highlightTimerRef = useRef(null);
   const [visibleVars, setVisibleVars] = useState([]);
   const [rootVars, setRootVars] = useState([]);
@@ -509,6 +540,8 @@ const AgentWorkspace = () => {
   const [contacts, setContacts] = useState([]);
   const [showQuickModal, setShowQuickModal] = useState(false);
   const [quickDraft, setQuickDraft] = useState('');
+  const [quickSending, setQuickSending] = useState(false);
+  const quickSendingRef = useRef(false);
   const [quickEditor, setQuickEditor] = useState({ open: false, id: null, name: '', text: '', saving: false });
   const [nameEditor, setNameEditor] = useState({ open: false, value: '', saving: false });
   const [chatAppearance, setChatAppearance] = useState(() => readChatAppearance(user?.id));
@@ -535,6 +568,7 @@ const AgentWorkspace = () => {
   const [genesysFlushLoading, setGenesysFlushLoading] = useState(false);
   const [ixcOrdersRefreshing, setIxcOrdersRefreshing] = useState(false);
   const [ixcLoginsRefreshing, setIxcLoginsRefreshing] = useState(false);
+  const [externalStatusRefreshing, setExternalStatusRefreshing] = useState(false);
   const [ixcRequestedChatId, setIxcRequestedChatId] = useState('');
   const [customerAccessPopoverOpen, setCustomerAccessPopoverOpen] = useState(false);
   const [ixcDetailsModal, setIxcDetailsModal] = useState({ open: false, chatId: '', closing: false });
@@ -588,6 +622,16 @@ const AgentWorkspace = () => {
     open: false,
     loading: false,
     submitting: false,
+    genesys: false,
+    chatId: '',
+    step: 'queue',
+    query: '',
+    queueResults: [],
+    selectedQueue: null,
+    wrapupCodes: [],
+    wrapupQuery: '',
+    selectedWrapup: null,
+    error: '',
     mode: 'queue',
     queue: '',
     agentId: '',
@@ -596,6 +640,8 @@ const AgentWorkspace = () => {
     agents: []
   });
   const chatEndRef = useRef(null);
+  const chatScrollRef = useRef(null);
+  const preserveScrollHeightRef = useRef(null);
   const agentInputRef = useRef(null);
   const selectedChatRef = useRef(null);
   const customerAccessPopoverRef = useRef(null);
@@ -622,6 +668,19 @@ const AgentWorkspace = () => {
     setAiError('');
     setAiImprovementUndo(null);
   }, [selectedChat?.id]);
+
+  useEffect(() => {
+    setVisibleMessageLimit(MESSAGE_WINDOW_SIZE);
+    preserveScrollHeightRef.current = null;
+  }, [selectedChat?.id]);
+
+  useEffect(() => {
+    const previousHeight = preserveScrollHeightRef.current;
+    const container = chatScrollRef.current;
+    if (previousHeight === null || !container) return;
+    container.scrollTop += Math.max(0, container.scrollHeight - previousHeight);
+    preserveScrollHeightRef.current = null;
+  }, [visibleMessageLimit]);
 
   useEffect(() => {
     if (!customerAccessPopoverOpen) return undefined;
@@ -1495,7 +1554,9 @@ const AgentWorkspace = () => {
     const poll = async () => {
       await fetchAll();
       if (isMounted) {
-        timeoutId = setTimeout(poll, 60000);
+        // Socket é o caminho principal. O polling vira somente reconciliação:
+        // 5 min conectado, 30 s durante uma queda do realtime.
+        timeoutId = setTimeout(poll, socketService.isConnected() ? 300000 : 30000);
       }
     };
 
@@ -1839,6 +1900,8 @@ const AgentWorkspace = () => {
 
     const handleNewChat = () => refresh(100);
     const handleQueueUpdate = () => refresh(300);
+    const handleSocketConnect = () => refresh(0);
+    socketService.on('connect', handleSocketConnect);
     socketService.on('message', handleRealtimeMessage);
     socketService.on('new_chat', handleNewChat);
     socketService.on('queue_update', handleQueueUpdate);
@@ -1851,6 +1914,7 @@ const AgentWorkspace = () => {
 
     return () => {
       socketService.off('message', handleRealtimeMessage);
+      socketService.off('connect', handleSocketConnect);
       socketService.off('new_chat', handleNewChat);
       socketService.off('queue_update', handleQueueUpdate);
       socketService.off('agent_assigned', handleAgentAssigned);
@@ -2117,7 +2181,15 @@ const AgentWorkspace = () => {
   const scrollToMessage = (messageId) => {
     if (!messageId) return;
     const el = document.getElementById(`agentmsg-${messageId}`);
-    if (!el) return;
+    if (!el) {
+      const messages = Array.isArray(selectedChat?.messages) ? selectedChat.messages : [];
+      const targetIndex = messages.findIndex((message) => String(message?.id || message?.messageId || '') === String(messageId));
+      if (targetIndex >= 0) {
+        setVisibleMessageLimit(Math.max(MESSAGE_WINDOW_SIZE, messages.length - targetIndex));
+        window.setTimeout(() => scrollToMessage(messageId), 0);
+      }
+      return;
+    }
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     setHighlightedMessageId(messageId);
     if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
@@ -2211,6 +2283,16 @@ const AgentWorkspace = () => {
           open: false,
           loading: false,
           submitting: false,
+          genesys: false,
+          chatId: '',
+          step: 'queue',
+          query: '',
+          queueResults: [],
+          selectedQueue: null,
+          wrapupCodes: [],
+          wrapupQuery: '',
+          selectedWrapup: null,
+          error: '',
           mode: 'queue',
           queue: '',
           agentId: '',
@@ -2223,11 +2305,37 @@ const AgentWorkspace = () => {
 
   const openTransferModal = async () => {
     if (!selectedChat || selectedChat.status === 'waiting') return;
+    if (isGenesysChatClient(selectedChat)) {
+      setWrapupPanel((previous) => ({ ...previous, open: false }));
+      setTransferModal({
+        open: true,
+        loading: false,
+        submitting: false,
+        genesys: true,
+        chatId: selectedChat.id,
+        step: 'queue',
+        query: '',
+        queueResults: [],
+        selectedQueue: null,
+        wrapupCodes: [],
+        wrapupQuery: '',
+        selectedWrapup: null,
+        error: '',
+        mode: 'queue',
+        queue: '',
+        agentId: '',
+        reason: '',
+        queues: [],
+        agents: []
+      });
+      return;
+    }
     setTransferModal((prev) => ({
       ...prev,
       open: true,
       loading: true,
       submitting: false,
+      chatId: selectedChat.id,
       mode: 'queue',
       queue: selectedChat.queue || '',
       agentId: '',
@@ -2249,7 +2357,144 @@ const AgentWorkspace = () => {
       }));
     } catch (error) {
       toast.error(error?.message || 'Falha ao carregar transferencia.');
-      closeTransferModal();
+      setTransferModal((previous) => ({
+        ...previous,
+        open: false,
+        submitting: false,
+        loading: false,
+        error: ''
+      }));
+    }
+  };
+
+  const searchGenesysTransferQueues = async () => {
+    if (!selectedChat?.id || !transferModal.genesys || transferModal.loading) return;
+    if (String(transferModal.chatId || '') !== String(selectedChat.id)) {
+      setTransferModal((previous) => ({ ...previous, error: 'A conversa selecionada mudou. Feche e abra a transferencia novamente.' }));
+      return;
+    }
+    const query = String(transferModal.query || '').replace(/\s+/g, ' ').trim();
+    if (query.length < 2) {
+      setTransferModal((previous) => ({ ...previous, error: 'Digite ao menos 2 caracteres.' }));
+      return;
+    }
+    const chatId = selectedChat.id;
+    setTransferModal((previous) => ({
+      ...previous,
+      loading: true,
+      error: '',
+      queueResults: [],
+      selectedQueue: null
+    }));
+    try {
+      const response = await apiRequest(
+        `/chats/${encodeURIComponent(chatId)}/genesys-transfer-queues?q=${encodeURIComponent(query)}`
+      );
+      const data = await response?.json().catch(() => ({}));
+      if (!response?.ok) throw new Error(data?.error || 'Falha ao pesquisar filas do Genesys');
+      if (String(selectedChatRef.current?.id || '') !== String(chatId)) return;
+      setTransferModal((previous) => ({
+        ...previous,
+        loading: false,
+        queueResults: Array.isArray(data.queues) ? data.queues : [],
+        error: Array.isArray(data.queues) && data.queues.length
+          ? ''
+          : 'Nenhuma fila encontrada.'
+      }));
+    } catch (error) {
+      setTransferModal((previous) => ({
+        ...previous,
+        loading: false,
+        error: error?.message || 'Falha ao pesquisar filas do Genesys'
+      }));
+    }
+  };
+
+  const selectGenesysTransferQueue = async (queue) => {
+    if (!selectedChat?.id || !queue?.id || transferModal.loading || transferModal.submitting) return;
+    if (String(transferModal.chatId || '') !== String(selectedChat.id)) {
+      setTransferModal((previous) => ({ ...previous, error: 'A conversa selecionada mudou. Feche e abra a transferencia novamente.' }));
+      return;
+    }
+    const chatId = selectedChat.id;
+    setTransferModal((previous) => ({
+      ...previous,
+      loading: true,
+      step: 'wrapup',
+      selectedQueue: queue,
+      wrapupCodes: [],
+      wrapupQuery: '',
+      selectedWrapup: null,
+      error: ''
+    }));
+    try {
+      const response = await apiRequest(`/chats/${encodeURIComponent(chatId)}/genesys-wrapupcodes`);
+      const data = await response?.json().catch(() => ({}));
+      if (!response?.ok) throw new Error(data?.error || 'Falha ao carregar tabulacoes');
+      if (String(selectedChatRef.current?.id || '') !== String(chatId)) return;
+      setTransferModal((previous) => ({
+        ...previous,
+        loading: false,
+        wrapupCodes: Array.isArray(data.codes) ? data.codes : [],
+        error: ''
+      }));
+    } catch (error) {
+      setTransferModal((previous) => ({
+        ...previous,
+        loading: false,
+        error: error?.message || 'Falha ao carregar tabulacoes'
+      }));
+    }
+  };
+
+  const confirmGenesysTransfer = async () => {
+    const queue = transferModal.selectedQueue;
+    const wrapup = transferModal.selectedWrapup;
+    if (!selectedChat?.id || !queue?.id || !wrapup?.id || transferModal.submitting) return;
+    if (String(transferModal.chatId || '') !== String(selectedChat.id)) {
+      setTransferModal((previous) => ({ ...previous, error: 'A conversa selecionada mudou. Transferencia bloqueada.' }));
+      return;
+    }
+    const chatId = selectedChat.id;
+    setTransferModal((previous) => ({ ...previous, submitting: true, error: '' }));
+    try {
+      const response = await apiRequest(`/chats/${encodeURIComponent(chatId)}/transfer-genesys`, {
+        method: 'POST',
+        body: JSON.stringify({
+          queueId: queue.id,
+          queueName: queue.name,
+          divisionId: queue.divisionId || '',
+          wrapupCode: wrapup.id,
+          wrapupName: wrapup.name,
+          notes: ''
+        })
+      });
+      const data = await response?.json().catch(() => ({}));
+      if (!response?.ok || data?.transferred !== true || data?.confirmed !== true) {
+        const partial = data?.transferred === true
+          ? 'A fila recebeu o atendimento, mas a tabulacao nao foi confirmada. Confira o Genesys antes de tentar novamente.'
+          : '';
+        throw new Error(partial || data?.error || 'O Genesys nao confirmou a transferencia');
+      }
+      setTransferModal((previous) => ({
+        ...previous,
+        open: false,
+        submitting: false,
+        loading: false,
+        error: ''
+      }));
+      invalidateCachedChat(chatId);
+      setMyChats((list) => (Array.isArray(list) ? list.filter((chat) => chat.id !== chatId) : list));
+      setWaitingChats((list) => (Array.isArray(list) ? list.filter((chat) => chat.id !== chatId) : list));
+      setSelectedChat(null);
+      toast.success(`Transferido para ${data.queueName || queue.name} e tabulado no Genesys`);
+    } catch (error) {
+      setTransferModal((previous) => ({
+        ...previous,
+        submitting: false,
+        error: error?.message || 'Falha ao transferir atendimento no Genesys'
+      }));
+      toast.error(error?.message || 'Falha ao transferir atendimento no Genesys');
     }
   };
 
@@ -2284,6 +2529,16 @@ const AgentWorkspace = () => {
         open: false,
         loading: false,
         submitting: false,
+        genesys: false,
+        chatId: '',
+        step: 'queue',
+        query: '',
+        queueResults: [],
+        selectedQueue: null,
+        wrapupCodes: [],
+        wrapupQuery: '',
+        selectedWrapup: null,
+        error: '',
         mode: 'queue',
         queue: '',
         agentId: '',
@@ -2569,6 +2824,7 @@ const AgentWorkspace = () => {
   };
 
   const handleQuickSend = async () => {
+    if (quickSendingRef.current) return;
     if (!quickDraft.trim() || !selectedChat) return;
     if (selectedChat.status === 'waiting') return toast.error("Puxe o atendimento antes de responder.");
     if (selectedChat.outreachPendingReply === true) return toast.error("Aguarde a primeira resposta do cliente antes de enviar mensagens.");
@@ -2578,6 +2834,8 @@ const AgentWorkspace = () => {
     const targetName = targetChat.customerName || 'cliente';
     const targetGx = targetChat.genesysConvId || targetChat.externalConvId || null;
     const textToSend = quickDraft;
+    quickSendingRef.current = true;
+    setQuickSending(true);
     try {
       const replyToMessageId = replyingTo?.id || null;
       const res = await apiRequest(`/chats/${targetChatId}/messages`, {
@@ -2591,7 +2849,13 @@ const AgentWorkspace = () => {
         })
       });
       const data = res ? await res.json().catch(() => ({})) : null;
-      if (res && res.ok) {
+      const validMessageResponse = Boolean(
+        res?.ok
+        && data
+        && typeof data === 'object'
+        && (data.id || data.messageId)
+      );
+      if (validMessageResponse) {
         const savedMsg = data;
         setReplyingTo(null);
         setSelectedChat((prev) => {
@@ -2605,10 +2869,13 @@ const AgentWorkspace = () => {
         setQuickDraft('');
         toast.success(`Enviado → ${data?.customerName || targetName}`);
       } else {
-        toast.error(data?.error || 'Falha no envio');
+        toast.error(data?.error || 'Resposta inválida ao enviar mensagem');
       }
     } catch (error) {
       toast.error('Falha no envio');
+    } finally {
+      quickSendingRef.current = false;
+      setQuickSending(false);
     }
   };
 
@@ -3103,6 +3370,31 @@ const AgentWorkspace = () => {
     }
   };
 
+  const refreshExternalStatus = async () => {
+    if (!selectedChat?.id || externalStatusRefreshing) return;
+    const details = selectedChat?.ixcData || chatVars?.ixc_dados || chatVars?.external_network;
+    if (!activeIxcLogins(details).length) {
+      toast.error('OLT não disponível no Genesys e dados IXC ainda não consultados');
+      return;
+    }
+    setExternalStatusRefreshing(true);
+    try {
+      const response = await apiRequest(`/chats/${encodeURIComponent(selectedChat.id)}/refresh-external-status`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      const data = await response?.json().catch(() => ({}));
+      if (!response?.ok) throw new Error(data?.error || 'Não foi possível verificar a rede');
+      toast.success('Verificação NocView + Grafana solicitada');
+      window.setTimeout(() => { void loadChatDetails(selectedChat.id); }, 900);
+      window.setTimeout(() => { void loadChatDetails(selectedChat.id); }, 2400);
+    } catch (error) {
+      toast.error(error?.message || 'Erro ao verificar problemas externos');
+    } finally {
+      window.setTimeout(() => setExternalStatusRefreshing(false), 2500);
+    }
+  };
+
   const refreshIxcOrders = async () => {
     if (!selectedChat?.id || ixcOrdersRefreshing) return;
     setIxcOrdersRefreshing(true);
@@ -3420,6 +3712,22 @@ const AgentWorkspace = () => {
     const allOrders = Array.isArray(details.osList) ? details.osList : [];
     const orders = allOrders.slice(0, 10);
     const logins = activeIxcLogins(details);
+    const externalStatus = details.externalStatus && typeof details.externalStatus === 'object'
+      ? details.externalStatus
+      : null;
+    const externalStatusLabel = (source) => {
+      if (!source) return 'Não verificado';
+      if (source.status === 'ok') return 'Atualizado';
+      if (source.status === 'stale') return 'Cache anterior';
+      if (source.status === 'rate_limited') return 'Em espera segura';
+      if (source.status === 'not_authenticated') return 'Login necessário';
+      return 'Indisponível';
+    };
+    const externalStatusTone = (source) => {
+      if (source?.status === 'ok') return 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/25 dark:text-emerald-200';
+      if (source?.status === 'stale' || source?.status === 'rate_limited') return 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/25 dark:text-amber-200';
+      return 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300';
+    };
     const address = [
       details.street,
       details.houseNumber,
@@ -3456,6 +3764,7 @@ const AgentWorkspace = () => {
               <div className="truncate text-[10px] text-slate-500 dark:text-slate-400">{details.fullName || selectedChatName} · últimas {orders.length} OS</div>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
+              <button type="button" disabled={externalStatusRefreshing || ixcDetailsModal.closing || !logins.length} onClick={refreshExternalStatus} className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-2 text-[9px] font-bold text-violet-700 hover:bg-violet-100 disabled:opacity-60 dark:border-violet-900/50 dark:bg-violet-950/30 dark:text-violet-300"><Activity size={12} className={externalStatusRefreshing ? 'animate-pulse' : ''} />{externalStatusRefreshing ? 'Verificando' : 'Reverificar rede'}</button>
               <button type="button" disabled={ixcOrdersRefreshing || ixcDetailsModal.closing} onClick={refreshIxcOrders} className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-cyan-200 bg-cyan-50 px-2 text-[9px] font-bold text-cyan-700 hover:bg-cyan-100 disabled:opacity-60 dark:border-cyan-900/50 dark:bg-cyan-950/30 dark:text-cyan-300"><RefreshCw size={12} className={ixcOrdersRefreshing ? 'animate-spin' : ''} />{ixcOrdersRefreshing ? 'Atualizando' : 'Atualizar OS'}</button>
               <button type="button" disabled={ixcDetailsModal.closing} onClick={closeIxcDetailsScreen} className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 disabled:pointer-events-none dark:text-slate-300 dark:hover:bg-slate-800"><XIcon size={14} /></button>
             </div>
@@ -3468,6 +3777,17 @@ const AgentWorkspace = () => {
                   <div className="mt-0.5 break-words text-xs font-medium text-slate-700 dark:text-slate-200">{String(value)}</div>
                 </div>
               ))}
+            </section>
+            <section className="mt-4">
+              <div className="mb-2 flex items-center justify-between gap-2"><div className="flex items-center gap-1.5 text-xs font-bold text-slate-800 dark:text-slate-100"><Activity size={14} className="text-violet-600" />Problemas externos</div><span className="text-[9px] text-slate-400">cache global, nunca por cliente</span></div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {[['NocView', externalStatus?.nocview], ['Grafana / Zabbix', externalStatus?.grafana]].map(([label, source]) => (
+                  <div key={label} className={`rounded-lg border px-3 py-2 ${externalStatusTone(source)}`}>
+                    <div className="flex items-center justify-between gap-2"><span className="text-[10px] font-bold">{label}</span><span className="text-[9px] font-bold uppercase">{externalStatusLabel(source)}</span></div>
+                    <div className="mt-1 text-[9px] opacity-80">{source?.available ? `${Number(source.count || 0)} ocorrência(s) global(is)` : 'Abra e autentique a plataforma para permitir a consulta.'}{source?.retryAt ? ` · nova tentativa após ${new Date(source.retryAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` : ''}</div>
+                  </div>
+                ))}
+              </div>
             </section>
             {logins.length ? (
               <section className="mt-4">
@@ -3487,6 +3807,8 @@ const AgentWorkspace = () => {
                         {login.oltName ? <span><b>OLT:</b> {login.oltName} {login.oltBoard || login.oltPort ? `· ${login.oltBoard || '—'}/${login.oltPort || '—'}` : ''}</span> : null}
                         {login.onuSerial ? <span><b>ONU:</b> {login.onuSerial}</span> : null}
                       </div>
+                      {login.massiva ? <div className={`mt-2 rounded-md border px-2.5 py-2 text-[10px] leading-4 ${login.massiva.level === 'inside' ? 'border-red-200 bg-red-50 text-red-800 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-200' : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200'}`}><div className="flex items-center gap-1 font-bold"><TriangleAlert size={12} />NocView · {login.massiva.level === 'inside' ? 'cliente possivelmente afetado' : 'OLT/POP com ocorrência; conferir PON'}</div><div className="mt-0.5 opacity-85">OS #{login.massiva.osId || '—'} · {login.massiva.problem || login.massiva.type || login.massiva.hostGpon || login.massiva.hostRadio || 'massiva em andamento'}{login.massiva.forecast ? ` · previsão ${login.massiva.forecast}` : ''}</div></div> : null}
+                      {login.grafana ? <div className={`mt-2 rounded-md border px-2.5 py-2 text-[10px] leading-4 ${login.grafana.level === 'inside' ? 'border-red-200 bg-red-50 text-red-800 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-200' : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200'}`}><div className="flex items-center gap-1 font-bold"><Activity size={12} />Grafana · {login.grafana.level === 'inside' ? 'queda confirmada na PON' : 'outra PON da mesma OLT em massiva'}</div><div className="mt-0.5 opacity-85">OLT {login.grafana.olt || '—'} · PON {login.grafana.pon || '—'}{login.grafana.percent ? ` · ${login.grafana.percent}% online` : ''}</div></div> : null}
                     </div>
                   ))}
                 </div>
@@ -3783,6 +4105,9 @@ const AgentWorkspace = () => {
     )
     : null;
   const selectedHeaderIxc = selectedChat?.ixcData || chatVars?.ixc_dados || null;
+  const selectedHeaderExternalNetwork = chatVars?.external_network && typeof chatVars.external_network === 'object'
+    ? chatVars.external_network
+    : null;
   const selectedHeaderGenesys = {
     legalName: String(chatVars?.nome_cliente || '').trim(),
     address: String(chatVars?.endereco || '').trim(),
@@ -3797,13 +4122,15 @@ const AgentWorkspace = () => {
   };
   const selectedHeaderHasGenesysData = Object.entries(selectedHeaderGenesys)
     .some(([key, value]) => key !== 'source' && Boolean(value));
-  const selectedHeaderGenesysLogin = [selectedHeaderGenesys.pppoe, selectedHeaderGenesys.ip, selectedHeaderGenesys.olt, selectedHeaderGenesys.ponId].some(Boolean)
+  const selectedHeaderGenesysExternalLogin = activeIxcLogins(selectedHeaderExternalNetwork)[0] || null;
+  const selectedHeaderGenesysLogin = [selectedHeaderGenesys.pppoe, selectedHeaderGenesys.ip, selectedHeaderGenesys.olt, selectedHeaderGenesys.ponId, selectedHeaderGenesysExternalLogin].some(Boolean)
     ? [{
+      ...(selectedHeaderGenesysExternalLogin || {}),
       loginId: `genesys_${selectedChat?.genesysConvId || selectedChat?.id || 'conversation'}`,
-      pppoeUser: selectedHeaderGenesys.pppoe,
-      ipv4: selectedHeaderGenesys.ip,
-      oltName: selectedHeaderGenesys.olt,
-      ponId: selectedHeaderGenesys.ponId,
+      pppoeUser: selectedHeaderGenesys.pppoe || selectedHeaderGenesysExternalLogin?.pppoeUser || '',
+      ipv4: selectedHeaderGenesys.ip || selectedHeaderGenesysExternalLogin?.ipv4 || '',
+      oltName: selectedHeaderGenesys.olt || selectedHeaderGenesysExternalLogin?.oltName || '',
+      ponId: selectedHeaderGenesys.ponId || selectedHeaderGenesysExternalLogin?.ponId || '',
       fullAddress: [selectedHeaderGenesys.address, selectedHeaderGenesys.city].filter(Boolean).join(' · '),
       active: true,
       online: null,
@@ -3838,6 +4165,7 @@ const AgentWorkspace = () => {
   ].filter(Boolean).join(', ') || selectedHeaderGenesys.address;
   const selectedHeaderCity = [selectedHeaderIxc?.city, selectedHeaderIxc?.state].filter(Boolean).join(' / ')
     || selectedHeaderGenesys.city;
+  const selectedHeaderCityName = String(selectedHeaderIxc?.city || selectedHeaderGenesys.city || '').trim();
   const selectedHeaderContractId = String(selectedHeaderIxc?.contractId || selectedHeaderGenesys.contractId || '').trim();
   const selectedHeaderBranch = String(selectedHeaderIxc?.branch || selectedHeaderIxc?.branchId || selectedHeaderGenesys.branch || '').trim();
   const selectedHeaderLegalName = selectedHeaderGenesys.legalName
@@ -3856,6 +4184,66 @@ const AgentWorkspace = () => {
     || selectedHeaderLogin?.ipAddress
     || ''
   ).trim();
+  const selectedHeaderPonId = String(
+    selectedHeaderLogin?.ponId
+    || [selectedHeaderLogin?.oltBoard, selectedHeaderLogin?.oltPort].filter(Boolean).join('/')
+    || selectedHeaderGenesys.ponId
+    || ''
+  ).trim();
+  const selectedHeaderExternalSources = [
+    (selectedHeaderIxc?.externalStatus || selectedHeaderExternalNetwork?.externalStatus)?.nocview,
+    (selectedHeaderIxc?.externalStatus || selectedHeaderExternalNetwork?.externalStatus)?.grafana,
+  ].filter(Boolean);
+  const selectedHeaderExternalExact = selectedHeaderLogins.some((login) => (
+    login?.massiva?.level === 'inside' || login?.grafana?.level === 'inside'
+  ));
+  const selectedHeaderExternalPartial = selectedHeaderLogins.some((login) => (
+    login?.massiva?.level === 'olt' || login?.grafana?.level === 'olt'
+  ));
+  // O match já foi calculado pela extensão usando o snapshot global. Para o badge,
+  // cache disponível é suficiente; "stale" e throttle local não invalidam o cruzamento.
+  const selectedHeaderExternalComparable = selectedHeaderExternalSources.length === 2
+    && selectedHeaderExternalSources.every((source) => source?.available === true);
+  const selectedHeaderExternalCached = selectedHeaderExternalSources.some((source) => source?.available === true);
+  const selectedHeaderExternalIndicator = selectedHeaderExternalExact
+    ? {
+      state: 'confirmed',
+      label: 'Problema externo',
+      title: 'Problema externo confirmado para a OLT/PON ou POP deste cliente',
+      className: 'border-red-200 bg-red-50 text-red-700 hover:bg-red-100 dark:border-red-900/60 dark:bg-red-950/35 dark:text-red-300',
+      dotClassName: 'bg-red-500',
+    }
+    : selectedHeaderExternalPartial
+      ? {
+        state: 'possible',
+        label: 'Possível massiva',
+        title: 'Existe ocorrência na OLT/POP, mas não há confirmação exata para a PON deste cliente',
+        className: 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300',
+        dotClassName: 'bg-amber-500',
+      }
+      : selectedHeaderExternalComparable
+        ? {
+          state: 'clear',
+          label: 'Sem problema externo',
+          title: 'Cache carregado de NocView e Grafana sem correspondência para este cliente',
+          className: 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300',
+          dotClassName: 'bg-emerald-500',
+        }
+        : selectedHeaderExternalCached
+          ? {
+            state: 'stale',
+            label: 'Rede desatualizada',
+            title: 'Há resultado em cache, mas as duas fontes ainda não estão atualizadas',
+            className: 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300',
+            dotClassName: 'bg-slate-400',
+          }
+          : {
+            state: 'unknown',
+            label: 'Rede não verificada',
+            title: 'Clique para abrir os dados IXC e verificar NocView e Grafana',
+            className: 'border-slate-200 bg-white text-slate-400 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400',
+            dotClassName: 'bg-slate-400',
+          };
   const genesysSyncConfirmed = Boolean(
     selectedChat?.genesysSync?.lastSnapshotId
     && selectedChat?.genesysSync?.acknowledgedAt
@@ -3879,6 +4267,19 @@ const AgentWorkspace = () => {
       .filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== '')
   );
   const visibleChatVars = selectedChat?.status === 'open' ? filterVars(rootOnlyVarMap) : [];
+  const selectedMessages = Array.isArray(selectedChat?.messages) ? selectedChat.messages : [];
+  const visibleMessages = selectedMessages.slice(-visibleMessageLimit);
+  const hiddenMessageCount = Math.max(0, selectedMessages.length - visibleMessages.length);
+  const performanceMode = (
+    waitingChats.length + myChats.length >= 10
+    || Number(navigator.hardwareConcurrency || 8) <= 4
+    || navigator.connection?.saveData === true
+  );
+  const loadEarlierMessages = () => {
+    const container = chatScrollRef.current;
+    preserveScrollHeightRef.current = container?.scrollHeight ?? null;
+    setVisibleMessageLimit((current) => Math.min(selectedMessages.length, current + MESSAGE_WINDOW_SIZE));
+  };
   const showListPanel = !isMobileView || !showMobileChat;
   const showChatPanel = !isMobileView || showMobileChat;
   const chatHasBackgroundImage = (
@@ -3888,7 +4289,7 @@ const AgentWorkspace = () => {
 
   return (
     <div
-      className="agent-workspace relative flex h-full w-full min-h-0 overflow-hidden bg-slate-100 dark:bg-slate-950"
+      className={`agent-workspace relative flex h-full w-full min-h-0 overflow-hidden bg-slate-100 dark:bg-slate-950 ${performanceMode ? 'ui-performance-mode' : ''}`}
       data-chat-background-mode={chatAppearance.backgroundMode}
       data-chat-bubble-theme={chatAppearance.customBubbles ? 'custom' : 'default'}
       data-chat-bubble-border={chatAppearance.bubbleBorderEnabled ? 'enabled' : 'disabled'}
@@ -4188,21 +4589,55 @@ const AgentWorkspace = () => {
                       </div>
                     ) : null}
                   </div>
-                  <div className="min-w-0">
-                    <div className="flex min-w-0 items-center gap-1.5">
-                      <button type="button" onClick={() => copyHeaderValue('Nome', selectedChatName)} title="Clique para copiar o nome" className="block max-w-full truncate text-left text-xs font-semibold text-slate-900 hover:text-blue-600 dark:text-white dark:hover:text-blue-300">{selectedChatName}</button>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+                      <button type="button" onClick={() => copyHeaderValue('Nome', selectedChatName)} title="Clique para copiar o nome" className="min-w-0 truncate text-left text-xs font-semibold text-slate-900 hover:text-blue-600 dark:text-white dark:hover:text-blue-300">{selectedChatName}</button>
                       {isGenesysChatClient(selectedChat) ? (
                         <span
                           className={`h-1.5 w-1.5 shrink-0 rounded-full ${genesysSyncConfirmed ? 'bg-emerald-500' : 'animate-pulse bg-amber-400'}`}
                           title={genesysSyncConfirmed ? 'Conversa confirmada pelo contrato de sincronização' : 'Conversa ainda convergindo com o Genesys'}
                         />
                       ) : null}
+                      {isGenesysChatClient(selectedChat) ? (
+                        <button
+                          type="button"
+                          onClick={selectedHeaderGenesys.olt && !selectedHeaderIxc ? refreshExternalStatus : handleBuscarIxc}
+                          disabled={ixcSearching || externalStatusRefreshing}
+                          className={`inline-flex h-5 shrink-0 items-center gap-1 rounded-full border px-1.5 text-[8px] font-bold transition-colors disabled:cursor-wait disabled:opacity-60 ${selectedHeaderExternalIndicator.className}`}
+                          title={selectedHeaderExternalIndicator.title}
+                          aria-label={selectedHeaderExternalIndicator.title}
+                          data-external-network-state={selectedHeaderExternalIndicator.state}
+                        >
+                          <span className={`h-1.5 w-1.5 rounded-full ${ixcSearching || externalStatusRefreshing ? 'animate-pulse bg-amber-400' : selectedHeaderExternalIndicator.dotClassName}`} />
+                          <span className="hidden whitespace-nowrap sm:inline">{ixcSearching || externalStatusRefreshing ? 'Consultando rede' : selectedHeaderExternalIndicator.label}</span>
+                        </button>
+                      ) : null}
+                      {selectedHeaderCityName ? (
+                        <button
+                          type="button"
+                          onClick={() => copyHeaderValue('Cidade', selectedHeaderCityName)}
+                          className="max-w-24 shrink truncate rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[8px] font-semibold text-slate-500 hover:border-blue-200 hover:text-blue-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-blue-800 dark:hover:text-blue-300"
+                          title={`${selectedHeaderCityName} · clique para copiar`}
+                        >
+                          {selectedHeaderCityName}
+                        </button>
+                      ) : null}
+                      {selectedHeaderPonId ? (
+                        <button
+                          type="button"
+                          onClick={() => copyHeaderValue('PON ID', selectedHeaderPonId)}
+                          className="max-w-28 shrink-0 truncate rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-mono text-[8px] font-semibold text-slate-500 hover:border-blue-200 hover:text-blue-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-blue-800 dark:hover:text-blue-300"
+                          title={`PON ${selectedHeaderPonId} · clique para copiar`}
+                        >
+                          {selectedHeaderPonId}
+                        </button>
+                      ) : null}
                     </div>
                     {selectedHeaderHasData ? (
                       <button
                         type="button"
                         onClick={() => setCustomerAccessPopoverOpen(true)}
-                        className="mt-0.5 flex max-w-full items-center gap-1.5 truncate text-left text-[9px] text-slate-500 hover:text-blue-600 dark:text-slate-400 dark:hover:text-blue-300"
+                        className="mt-px flex max-w-full items-center gap-1.5 truncate text-left text-[9px] text-slate-500 hover:text-blue-600 dark:text-slate-400 dark:hover:text-blue-300"
                         title="Clique para ver todos os dados de acesso"
                       >
                         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${selectedHeaderAccessTone === 'online' ? 'bg-emerald-500' : selectedHeaderAccessTone === 'offline' ? 'bg-red-500' : 'bg-slate-400'}`} />
@@ -4211,9 +4646,7 @@ const AgentWorkspace = () => {
                         {selectedHeaderIp ? <><span className="shrink-0 text-slate-300 dark:text-slate-600">·</span><span className="shrink-0 font-mono">{selectedHeaderIp}</span></> : null}
                         {selectedHeaderLogins.length > 1 ? <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-px text-[8px] font-bold text-slate-500 dark:bg-slate-800 dark:text-slate-300">+{selectedHeaderLogins.length - 1}</span> : null}
                       </button>
-                    ) : (
-                      <button type="button" onClick={() => setCustomerAccessPopoverOpen(true)} className="mt-0.5 text-[9px] text-slate-400 hover:text-blue-600 dark:hover:text-blue-300">IXC não consultado · clique no cliente</button>
-                    )}
+                    ) : null}
                   </div>
                 </div>
                 <div className="relative flex shrink-0 items-center gap-1.5">
@@ -4339,6 +4772,87 @@ const AgentWorkspace = () => {
                       </button>
                     </>
                   )}
+                  {transferModal.open && transferModal.genesys ? (
+                    <div className="absolute right-0 top-10 z-[75] w-[min(430px,calc(100vw-24px))] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+                      <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2 dark:border-slate-800">
+                        <div>
+                          <div className="text-xs font-bold text-slate-800 dark:text-slate-100">Transferir no Genesys</div>
+                          <div className="text-[9px] text-slate-400">Fila e tabulacao sao validadas antes do card sair</div>
+                        </div>
+                        <button type="button" disabled={transferModal.submitting} onClick={closeTransferModal} className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 disabled:opacity-40 dark:hover:bg-slate-800"><XIcon size={14} /></button>
+                      </div>
+                      {transferModal.step === 'queue' ? (
+                        <div className="p-2.5">
+                          <form
+                            className="flex gap-1.5"
+                            onSubmit={(event) => {
+                              event.preventDefault();
+                              searchGenesysTransferQueues();
+                            }}
+                          >
+                            <input
+                              autoFocus
+                              value={transferModal.query}
+                              onChange={(event) => setTransferModal((previous) => ({ ...previous, query: event.target.value, error: '' }))}
+                              placeholder="Pesquisar fila do Genesys..."
+                              className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-800 outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                            />
+                            <button type="submit" disabled={transferModal.loading || transferModal.query.trim().length < 2} className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-3 py-2 text-[10px] font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">
+                              {transferModal.loading ? <Loader2 size={13} className="animate-spin" /> : 'Buscar'}
+                            </button>
+                          </form>
+                          {transferModal.error ? <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-[10px] text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">{transferModal.error}</div> : null}
+                          <div className="mt-2 max-h-64 overflow-y-auto custom-scrollbar">
+                            {transferModal.queueResults.map((queue) => (
+                              <button key={queue.id} type="button" onClick={() => selectGenesysTransferQueue(queue)} className="mb-1 flex w-full items-center justify-between gap-3 rounded-lg border border-transparent px-3 py-2 text-left transition-colors hover:border-blue-200 hover:bg-blue-50 dark:hover:border-blue-900/50 dark:hover:bg-blue-950/20">
+                                <span className="min-w-0">
+                                  <span className="block truncate text-[11px] font-semibold text-slate-800 dark:text-slate-100">{queue.name}</span>
+                                  <span className="mt-0.5 block truncate text-[9px] text-slate-400">{queue.divisionName || 'Divisao Genesys'}</span>
+                                </span>
+                                <ArrowRightLeft size={13} className="shrink-0 text-blue-500" />
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="p-2.5">
+                          <div className="mb-2 flex items-center gap-2 rounded-lg border border-blue-100 bg-blue-50 px-2.5 py-2 dark:border-blue-900/40 dark:bg-blue-950/20">
+                            <button type="button" disabled={transferModal.submitting} onClick={() => setTransferModal((previous) => ({ ...previous, step: 'queue', selectedWrapup: null, error: '' }))} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-blue-600 hover:bg-blue-100 disabled:opacity-40 dark:text-blue-300 dark:hover:bg-blue-900/30"><ArrowLeft size={13} /></button>
+                            <span className="min-w-0">
+                              <span className="block text-[9px] font-bold uppercase tracking-wide text-blue-500">Fila escolhida</span>
+                              <span className="block truncate text-[11px] font-semibold text-slate-800 dark:text-slate-100">{transferModal.selectedQueue?.name}</span>
+                            </span>
+                          </div>
+                          <input
+                            value={transferModal.wrapupQuery}
+                            onChange={(event) => setTransferModal((previous) => ({ ...previous, wrapupQuery: event.target.value, error: '' }))}
+                            placeholder="Pesquisar motivo da tabulacao..."
+                            className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-800 outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                          />
+                          {transferModal.error ? <div className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-[10px] text-red-700 dark:bg-red-950/30 dark:text-red-300">{transferModal.error}</div> : null}
+                          <div className="mt-2 max-h-64 overflow-y-auto custom-scrollbar">
+                            {transferModal.loading ? (
+                              <div className="flex items-center justify-center gap-2 py-8 text-xs text-slate-400"><Loader2 size={15} className="animate-spin" /> Carregando tabulacoes...</div>
+                            ) : transferModal.wrapupCodes
+                              .filter((code) => `${code.name} ${code.description || ''}`.toLowerCase().includes(transferModal.wrapupQuery.trim().toLowerCase()))
+                              .map((code) => (
+                                <button key={code.id} type="button" onClick={() => setTransferModal((previous) => ({ ...previous, selectedWrapup: code }))} className={`mb-1 w-full rounded-lg border px-3 py-2 text-left transition-colors ${transferModal.selectedWrapup?.id === code.id ? 'border-blue-400 bg-blue-50 dark:border-blue-700 dark:bg-blue-950/30' : 'border-transparent hover:bg-slate-50 dark:hover:bg-slate-800'}`}>
+                                  <span className="block text-[11px] font-semibold leading-4 text-slate-800 dark:text-slate-100">{code.name}</span>
+                                  {code.description ? <span className="mt-0.5 block text-[9px] leading-3 text-slate-500 dark:text-slate-400">{code.description}</span> : null}
+                                </button>
+                              ))}
+                          </div>
+                          <div className="mt-2 flex items-center justify-end gap-2 border-t border-slate-100 pt-2 dark:border-slate-800">
+                            <button type="button" disabled={transferModal.submitting} onClick={closeTransferModal} className="rounded-lg px-3 py-2 text-[10px] font-semibold text-slate-500 hover:bg-slate-100 disabled:opacity-40 dark:hover:bg-slate-800">Cancelar</button>
+                            <button type="button" disabled={!transferModal.selectedWrapup || transferModal.loading || transferModal.submitting} onClick={confirmGenesysTransfer} className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-[10px] font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">
+                              {transferModal.submitting ? <Loader2 size={13} className="animate-spin" /> : <ArrowRightLeft size={13} />}
+                              {transferModal.submitting ? 'Confirmando no Genesys...' : 'Transferir e tabular'}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
                   {wrapupPanel.open ? (
                     <div className="absolute right-0 top-10 z-[70] w-[min(420px,calc(100vw-24px))] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
                       <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2 dark:border-slate-800">
@@ -4412,7 +4926,7 @@ const AgentWorkspace = () => {
             </header>
             {visibleChatVars.length > 0 ? <div className="border-b border-slate-200 bg-white/80 px-2.5 py-1.5 backdrop-blur dark:border-slate-800 dark:bg-slate-900/70 lg:px-3"><div className="flex gap-1.5 overflow-x-auto scrollbar-hide">{visibleChatVars.map(([key, value]) => <div key={key} className="min-w-[90px] rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 dark:border-slate-700 dark:bg-slate-800/70"><div className="text-[9px] font-bold uppercase tracking-wide text-slate-400">{key.replace('_', ' ')}</div><div className="truncate text-[11px] font-semibold text-slate-700 dark:text-slate-200" title={String(value)}>{String(value)}</div></div>)}</div></div> : null}
             {selectedChat.outreachPendingReply === true ? <div className="border-b border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/30 dark:bg-amber-900/20 dark:text-amber-200 lg:px-3">Atendimento ativo iniciado. Aguarde a primeira resposta do cliente para liberar o envio manual de mensagens.</div> : null}
-            <div className="relative flex min-h-0 flex-1 flex-col lg:flex-row"><div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.08),transparent_35%),radial-gradient(circle_at_bottom,rgba(14,165,233,0.08),transparent_30%)] dark:bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.12),transparent_35%),radial-gradient(circle_at_bottom,rgba(14,165,233,0.10),transparent_30%)]" /><div className="relative flex min-h-0 flex-1 flex-col lg:flex-row"><div className="flex-1 overflow-y-auto px-2.5 py-2.5 custom-scrollbar sm:px-3 lg:px-4"><div className="mx-auto flex max-w-2xl flex-col gap-2">{(Array.isArray(selectedChat.messages) ? selectedChat.messages : []).map((m, i) => { const previousMessage = i > 0 ? selectedChat.messages[i - 1] : null; const groupedWithPrevious = belongsToSameMessageGroup(previousMessage, m); const hasStatus = Boolean(getMessageDeliveryStatus(m) && (m.sender === 'agent' || m.sender === 'bot')); const timeClass = m.sender === 'agent' ? 'text-white/75' : 'text-slate-400 dark:text-slate-500'; const bubbleSpacingClass = m.sender === 'system' ? '' : hasStatus ? 'pb-5 pr-10' : 'pb-5'; const groupedCornerClass = groupedWithPrevious ? (m.sender === 'agent' ? 'rounded-tr-md' : 'rounded-tl-md') : ''; return <div key={m.id || `${m.sender}_${i}`} id={`agentmsg-${m.id}`} className={`ui-message-enter -mx-2 px-2 py-0.5 flex transition-colors duration-500 ${groupedWithPrevious ? '-mt-1.5' : ''} ${m.sender === 'agent' ? 'justify-end' : 'justify-start'} ${highlightedMessageId === m.id ? 'bg-blue-400/20' : ''}`}><div className={`group relative max-w-[88%] rounded-2xl px-3 py-2 text-xs shadow-sm sm:max-w-[78%] ${m.sender === 'system' ? 'w-full rounded-xl bg-slate-200/80 py-1.5 text-center text-[11px] italic text-slate-500 shadow-none dark:bg-slate-800 dark:text-slate-400' : m.sender === 'agent' ? `rounded-br-md bg-[#0b93f6] text-white ${bubbleSpacingClass} ${groupedCornerClass}` : `rounded-bl-md border border-slate-200 bg-white text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 ${bubbleSpacingClass} ${groupedCornerClass}`} ${m.sender !== 'system' ? 'border border-black/5' : ''}`}>{m.sender !== 'system' && !groupedWithPrevious ? <div className={`chat-message-sender-name mb-1 max-w-[200px] truncate text-[10px] font-bold uppercase tracking-wide ${m.sender === 'agent' ? 'text-blue-100/90' : 'text-blue-600 dark:text-blue-400'}`}>{messageSenderLabel(m)}</div> : null}{m.replyTo ? <button type="button" onClick={() => scrollToMessage(m.replyTo.messageId)} className={`mb-1.5 block w-full max-w-full rounded-lg border-l-2 px-2 py-1 text-left text-[11px] transition-opacity hover:opacity-80 ${m.sender === 'agent' ? 'border-white/60 bg-white/15 text-white/90' : 'border-blue-400 bg-blue-50 text-slate-600 dark:bg-slate-700/50 dark:text-slate-300'}`}><div className="truncate font-semibold opacity-80">{m.replyTo.sender === 'agent' ? 'Você' : m.replyTo.sender === 'user' ? selectedChatName : (m.replyTo.sender || 'Mensagem')}</div><div className="truncate opacity-90">{m.replyTo.hasMedia && !m.replyTo.preview ? '[mídia]' : (m.replyTo.preview || '[mensagem]')}</div></button> : null}<ChatMessageContent message={m} messages={selectedChat.messages} messageIndex={i} onOpenMedia={openChatMedia} />{m.sender !== 'system' ? <button type="button" onClick={() => setReplyingTo({ id: m.id, sender: m.sender, preview: (m.text || (m.media ? `[${m.media.type || 'mídia'}]` : '') || '').slice(0, 120) })} title="Responder" className={`absolute -top-2 ${m.sender === 'agent' ? 'left-1' : 'right-1'} opacity-0 group-hover:opacity-100 flex h-6 w-6 items-center justify-center rounded-full bg-white text-slate-500 shadow ring-1 ring-black/5 transition-opacity hover:text-blue-600 dark:bg-slate-700 dark:text-slate-300`}><CornerUpLeft size={12} /></button> : null}{m.sender !== 'system' ? <span className={`absolute bottom-2 ${hasStatus ? 'right-8' : 'right-3'} text-[10px] ${timeClass}`}>{formatTime(m.timestamp)}</span> : null}{renderMessageDeliveryStatus(m)}</div></div>; })}<div ref={chatEndRef} /></div></div>{!isMobileView ? <div className={`hidden lg:block overflow-hidden transition-[width,opacity] duration-300 ease-out ${isSidePanelCollapsed ? 'w-0 opacity-0' : 'w-[280px] opacity-100'}`}><aside className="h-full w-[280px] overflow-y-auto border-l border-slate-200 bg-white/95 px-4 py-4 custom-scrollbar backdrop-blur dark:border-slate-800 dark:bg-slate-900/95"><div className={`transition-opacity duration-200 ${isSidePanelCollapsed ? 'pointer-events-none opacity-0' : 'opacity-100 delay-75'}`}>{renderInfoPanel()}{renderQuickRepliesPanel()}</div></aside></div> : null}{!isMobileView && isGenesysChatClient(selectedChat) ? <div className={`hidden lg:block overflow-hidden transition-[width,opacity] duration-300 ease-out ${isAiPanelOpen ? 'w-[330px] opacity-100' : 'w-0 opacity-0'}`}><aside className="h-full w-[330px] border-l border-violet-100 bg-white/98 px-4 py-4 dark:border-violet-900/30 dark:bg-slate-900/98">{renderAiPanel()}</aside></div> : null}</div></div>
+            <div className="relative flex min-h-0 flex-1 flex-col lg:flex-row"><div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.08),transparent_35%),radial-gradient(circle_at_bottom,rgba(14,165,233,0.08),transparent_30%)] dark:bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.12),transparent_35%),radial-gradient(circle_at_bottom,rgba(14,165,233,0.10),transparent_30%)]" /><div className="relative flex min-h-0 flex-1 flex-col lg:flex-row"><div ref={chatScrollRef} className="flex-1 overflow-y-auto px-2.5 py-2.5 custom-scrollbar sm:px-3 lg:px-4"><div className="mx-auto flex max-w-2xl flex-col gap-2">{hiddenMessageCount > 0 ? <button type="button" onClick={loadEarlierMessages} className="mx-auto mb-1 rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-xs font-semibold text-slate-600 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800/90 dark:text-slate-200">Carregar {Math.min(MESSAGE_WINDOW_SIZE, hiddenMessageCount)} mensagens anteriores</button> : null}{visibleMessages.map((m, i) => { const absoluteIndex = hiddenMessageCount + i; const previousMessage = absoluteIndex > 0 ? selectedMessages[absoluteIndex - 1] : null; const groupedWithPrevious = belongsToSameMessageGroup(previousMessage, m); const hasStatus = Boolean(getMessageDeliveryStatus(m) && (m.sender === 'agent' || m.sender === 'bot')); const timeClass = m.sender === 'agent' ? 'text-white/75' : 'text-slate-400 dark:text-slate-500'; const bubbleSpacingClass = m.sender === 'system' ? '' : hasStatus ? 'pb-5 pr-10' : 'pb-5'; const groupedCornerClass = groupedWithPrevious ? (m.sender === 'agent' ? 'rounded-tr-md' : 'rounded-tl-md') : ''; return <div key={m.id || `${m.sender}_${absoluteIndex}`} id={`agentmsg-${m.id}`} className={`ui-message-enter -mx-2 px-2 py-0.5 flex transition-colors duration-500 ${groupedWithPrevious ? '-mt-1.5' : ''} ${m.sender === 'agent' ? 'justify-end' : 'justify-start'} ${highlightedMessageId === m.id ? 'bg-blue-400/20' : ''}`}><div className={`group relative max-w-[88%] rounded-2xl px-3 py-2 text-xs shadow-sm sm:max-w-[78%] ${m.sender === 'system' ? 'w-full rounded-xl bg-slate-200/80 py-1.5 text-center text-[11px] italic text-slate-500 shadow-none dark:bg-slate-800 dark:text-slate-400' : m.sender === 'agent' ? `rounded-br-md bg-[#0b93f6] text-white ${bubbleSpacingClass} ${groupedCornerClass}` : `rounded-bl-md border border-slate-200 bg-white text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 ${bubbleSpacingClass} ${groupedCornerClass}`} ${m.sender !== 'system' ? 'border border-black/5' : ''}`}>{m.sender !== 'system' && !groupedWithPrevious ? <div className={`chat-message-sender-name mb-1 max-w-[200px] truncate text-[10px] font-bold uppercase tracking-wide ${m.sender === 'agent' ? 'text-blue-100/90' : 'text-blue-600 dark:text-blue-400'}`}>{messageSenderLabel(m)}</div> : null}{m.replyTo ? <button type="button" onClick={() => scrollToMessage(m.replyTo.messageId)} className={`mb-1.5 block w-full max-w-full rounded-lg border-l-2 px-2 py-1 text-left text-[11px] transition-opacity hover:opacity-80 ${m.sender === 'agent' ? 'border-white/60 bg-white/15 text-white/90' : 'border-blue-400 bg-blue-50 text-slate-600 dark:bg-slate-700/50 dark:text-slate-300'}`}><div className="truncate font-semibold opacity-80">{m.replyTo.sender === 'agent' ? 'Você' : m.replyTo.sender === 'user' ? selectedChatName : (m.replyTo.sender || 'Mensagem')}</div><div className="truncate opacity-90">{m.replyTo.hasMedia && !m.replyTo.preview ? '[mídia]' : (m.replyTo.preview || '[mensagem]')}</div></button> : null}<ChatMessageContent message={m} messages={selectedMessages} messageIndex={absoluteIndex} onOpenMedia={openChatMedia} />{m.sender !== 'system' ? <button type="button" onClick={() => setReplyingTo({ id: m.id, sender: m.sender, preview: (m.text || (m.media ? `[${m.media.type || 'mídia'}]` : '') || '').slice(0, 120) })} title="Responder" className={`absolute -top-2 ${m.sender === 'agent' ? 'left-1' : 'right-1'} opacity-0 group-hover:opacity-100 flex h-6 w-6 items-center justify-center rounded-full bg-white text-slate-500 shadow ring-1 ring-black/5 transition-opacity hover:text-blue-600 dark:bg-slate-700 dark:text-slate-300`}><CornerUpLeft size={12} /></button> : null}{m.sender !== 'system' ? <span className={`absolute bottom-2 ${hasStatus ? 'right-8' : 'right-3'} text-[10px] ${timeClass}`}>{formatTime(m.timestamp)}</span> : null}{renderMessageDeliveryStatus(m)}</div></div>; })}<div ref={chatEndRef} /></div></div>{!isMobileView ? <div className={`hidden lg:block overflow-hidden transition-[width,opacity] duration-300 ease-out ${isSidePanelCollapsed ? 'w-0 opacity-0' : 'w-[280px] opacity-100'}`}><aside className="h-full w-[280px] overflow-y-auto border-l border-slate-200 bg-white/95 px-4 py-4 custom-scrollbar backdrop-blur dark:border-slate-800 dark:bg-slate-900/95"><div className={`transition-opacity duration-200 ${isSidePanelCollapsed ? 'pointer-events-none opacity-0' : 'opacity-100 delay-75'}`}>{renderInfoPanel()}{renderQuickRepliesPanel()}</div></aside></div> : null}{!isMobileView && isGenesysChatClient(selectedChat) ? <div className={`hidden lg:block overflow-hidden transition-[width,opacity] duration-300 ease-out ${isAiPanelOpen ? 'w-[330px] opacity-100' : 'w-0 opacity-0'}`}><aside className="h-full w-[330px] border-l border-violet-100 bg-white/98 px-4 py-4 dark:border-violet-900/30 dark:bg-slate-900/98">{renderAiPanel()}</aside></div> : null}</div></div>
             <form onSubmit={handleSend} className="border-t border-slate-200 bg-white/90 px-2.5 py-2 backdrop-blur dark:border-slate-800 dark:bg-slate-900/90 sm:px-3 lg:px-4">{replyingTo ? <div className="mx-auto mb-1.5 flex max-w-2xl items-center gap-2 rounded-xl border-l-4 border-blue-500 bg-slate-50 px-2.5 py-1.5 dark:bg-slate-800"><CornerUpLeft size={14} className="shrink-0 text-blue-500" /><div className="min-w-0 flex-1"><div className="truncate text-[11px] font-semibold text-blue-600 dark:text-blue-400">Respondendo a {replyingTo.sender === 'agent' ? 'você' : replyingTo.sender === 'user' ? selectedChatName : (replyingTo.sender || 'mensagem')}</div><div className="truncate text-xs text-slate-500 dark:text-slate-400">{replyingTo.preview || '[mensagem]'}</div></div><button type="button" onClick={() => setReplyingTo(null)} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-slate-400 hover:bg-slate-200 hover:text-slate-600 dark:hover:bg-slate-700"><XIcon size={14} /></button></div> : null}<div className="mx-auto flex max-w-2xl items-end gap-1.5"><button type="button" onClick={handleImproveAgentText} disabled={selectedChatReplyLocked || aiImprovingText || !agentInput.trim()} title="Corrigir ortografia e melhorar clareza com IA" aria-label="Melhorar texto com IA" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-violet-200 bg-violet-50 text-violet-700 transition-colors hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-violet-900/50 dark:bg-violet-950/30 dark:text-violet-300 dark:hover:bg-violet-950/50">{aiImprovingText ? <Loader2 size={15} className="animate-spin" /> : <OnionAiIcon size={17} />}</button><button type="button" onClick={openMediaPicker} disabled={selectedChatReplyLocked} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"><Paperclip size={15} /></button><div className="flex flex-1 items-end rounded-2xl border border-slate-200 bg-slate-50 px-1 shadow-sm dark:border-slate-700 dark:bg-slate-800"><textarea ref={agentInputRef} rows={1} className="max-h-28 min-h-[36px] w-full resize-none bg-transparent px-3 py-2 text-xs leading-4 text-slate-900 outline-none placeholder:text-slate-400 disabled:cursor-not-allowed disabled:opacity-50 dark:text-white dark:placeholder:text-slate-500 custom-scrollbar" value={agentInput} onChange={(e) => setAgentInput(e.target.value)} onKeyDown={handleAgentInputKeyDown} placeholder={selectedChat.outreachPendingReply === true ? 'Aguardando a primeira resposta do cliente...' : selectedChat.status === 'waiting' ? 'Puxe o atendimento para responder...' : 'Digite sua mensagem...'} disabled={selectedChatReplyLocked} /></div><button type="submit" disabled={selectedChatReplyLocked} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"><Send size={15} /></button></div><div className="mx-auto mt-1 flex max-w-3xl items-center justify-between gap-2 pl-[92px] text-[10px] font-medium text-slate-400 dark:text-slate-500"><span>Enter envia • Shift + Enter quebra linha</span>{aiImprovementUndo ? <button type="button" onClick={undoAiImprovement} className="shrink-0 font-semibold text-violet-600 hover:text-violet-700 dark:text-violet-300 dark:hover:text-violet-200">Desfazer melhoria</button> : null}</div></form>
           </>
         ) : (
@@ -4420,8 +4934,8 @@ const AgentWorkspace = () => {
         )}
         {isMobileView && isAiPanelOpen && selectedChat && isGenesysChatClient(selectedChat) ? <div className="ui-overlay-fade fixed inset-0 z-50 bg-slate-950/55 lg:hidden" onClick={() => setIsAiPanelOpen(false)}><div className="ui-sheet-surface absolute inset-x-0 bottom-0 flex max-h-[88vh] min-h-[58vh] flex-col rounded-t-[28px] bg-white p-4 shadow-2xl dark:bg-slate-900" onClick={(event) => event.stopPropagation()}><div className="mx-auto mb-3 h-1.5 w-14 shrink-0 rounded-full bg-slate-200 dark:bg-slate-700" /><div className="min-h-0 flex-1">{renderAiPanel()}</div></div></div> : null}
         {isMobileView && mobilePanelOpen && selectedChat ? <div className="ui-overlay-fade fixed inset-0 z-40 bg-slate-950/50 lg:hidden" onClick={() => setMobilePanelOpen(false)}><div className="ui-sheet-surface absolute inset-x-0 bottom-0 max-h-[78vh] rounded-t-[28px] bg-white p-4 shadow-2xl dark:bg-slate-900" onClick={(e) => e.stopPropagation()}><div className="mx-auto mb-4 h-1.5 w-14 rounded-full bg-slate-200 dark:bg-slate-700" /><div className="flex items-center justify-between gap-3"><div><div className="text-sm font-semibold text-slate-900 dark:text-white">{mobilePanelTab === 'info' ? 'Info do cliente' : 'Mensagens rapidas'}</div><div className="text-xs text-slate-500 dark:text-slate-400">{selectedChatName}</div></div><button type="button" onClick={() => setMobilePanelOpen(false)} className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-200"><XCircle size={18} /></button></div><div className="mt-4 grid grid-cols-2 gap-2 rounded-2xl bg-slate-100 p-1 dark:bg-slate-800"><button type="button" onClick={() => setMobilePanelTab('info')} className={`rounded-2xl px-3 py-2 text-sm font-semibold transition-colors ${mobilePanelTab === 'info' ? 'bg-white text-blue-600 shadow-sm dark:bg-slate-700 dark:text-blue-300' : 'text-slate-500 dark:text-slate-300'}`}>Info</button><button type="button" onClick={() => setMobilePanelTab('quick')} className={`rounded-2xl px-3 py-2 text-sm font-semibold transition-colors ${mobilePanelTab === 'quick' ? 'bg-white text-blue-600 shadow-sm dark:bg-slate-700 dark:text-blue-300' : 'text-slate-500 dark:text-slate-300'}`}>Rapidas</button></div><div className="mt-4 max-h-[56vh] overflow-y-auto custom-scrollbar pr-1">{mobilePanelTab === 'info' ? renderInfoPanel() : renderQuickRepliesPanel()}</div></div></div> : null}
-        {transferModal.open ? <div className="ui-overlay-fade fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-4 backdrop-blur-sm lg:items-center" onClick={closeTransferModal}><div className="ui-responsive-modal w-full max-w-xl rounded-[28px] bg-white p-5 shadow-2xl dark:bg-slate-900" onClick={(e) => e.stopPropagation()}><div className="flex items-start justify-between gap-4"><div><h3 className="text-lg font-bold text-slate-900 dark:text-white">Transferir atendimento</h3><p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Encaminhe {selectedChatName} para uma fila ou diretamente para outro agente.</p></div><button type="button" onClick={closeTransferModal} disabled={transferModal.submitting} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-slate-100 text-slate-600 disabled:opacity-50 dark:bg-slate-800 dark:text-slate-200"><XCircle size={18} /></button></div>{transferModal.loading ? <div className="mt-5 flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-5 text-sm font-semibold text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"><Loader2 size={18} className="animate-spin text-blue-500" />Carregando destinos...</div> : <div className="mt-5 space-y-4"><div className="grid grid-cols-2 gap-2 rounded-2xl bg-slate-100 p-1 dark:bg-slate-800"><button type="button" onClick={() => setTransferModal((prev) => ({ ...prev, mode: 'queue' }))} className={`rounded-2xl px-3 py-2 text-sm font-semibold transition-colors ${transferModal.mode === 'queue' ? 'bg-white text-blue-600 shadow-sm dark:bg-slate-700 dark:text-blue-300' : 'text-slate-500 dark:text-slate-300'}`}>Fila</button><button type="button" onClick={() => setTransferModal((prev) => ({ ...prev, mode: 'agent' }))} className={`rounded-2xl px-3 py-2 text-sm font-semibold transition-colors ${transferModal.mode === 'agent' ? 'bg-white text-blue-600 shadow-sm dark:bg-slate-700 dark:text-blue-300' : 'text-slate-500 dark:text-slate-300'}`}>Agente</button></div>{transferModal.mode === 'queue' ? <div><label className="mb-2 block text-sm font-semibold text-slate-800 dark:text-slate-100">Fila de destino</label><select value={transferModal.queue} onChange={(e) => setTransferModal((prev) => ({ ...prev, queue: e.target.value }))} className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white">{transferModal.queues.length === 0 ? <option value="">Nenhuma fila disponivel</option> : transferModal.queues.map((queue) => <option key={queue.id || queue.name} value={queue.name}>{queue.name}</option>)}</select></div> : <div><label className="mb-2 block text-sm font-semibold text-slate-800 dark:text-slate-100">Agente de destino</label><select value={transferModal.agentId} onChange={(e) => setTransferModal((prev) => ({ ...prev, agentId: e.target.value }))} className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white">{transferModal.agents.length === 0 ? <option value="">Nenhum agente disponivel</option> : transferModal.agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name || agent.username}{agent.queues?.length ? ` - ${agent.queues.join(', ')}` : ''}</option>)}</select></div>}<div><label className="mb-2 block text-sm font-semibold text-slate-800 dark:text-slate-100">Motivo opcional</label><textarea rows={3} value={transferModal.reason} onChange={(e) => setTransferModal((prev) => ({ ...prev, reason: e.target.value }))} placeholder="Ex: encaminhando para especialista..." className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></div><div className="flex flex-col gap-3 sm:flex-row"><button type="button" onClick={closeTransferModal} disabled={transferModal.submitting} className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Cancelar</button><button type="button" onClick={handleTransferChat} disabled={transferModal.submitting || (transferModal.mode === 'queue' ? !transferModal.queue : !transferModal.agentId)} className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">{transferModal.submitting ? <Loader2 size={16} className="animate-spin" /> : <ArrowRightLeft size={16} />}{transferModal.submitting ? 'Transferindo...' : 'Transferir'}</button></div></div>}</div></div> : null}
-        {showQuickModal ? <div className="ui-overlay-fade fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setShowQuickModal(false)}><div className="ui-modal-surface w-full max-w-lg rounded-3xl bg-white p-5 shadow-2xl dark:bg-slate-900" onClick={(e) => e.stopPropagation()}><h3 className="mb-3 text-lg font-bold text-slate-900 dark:text-white">Mensagem rapida</h3><textarea className="min-h-[160px] w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white" value={quickDraft} onChange={(e) => setQuickDraft(e.target.value)} /><div className="mt-4 flex gap-3"><button type="button" onClick={() => setShowQuickModal(false)} className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Cancelar</button><button type="button" onClick={handleQuickSend} disabled={selectedChatReplyLocked} className="flex-1 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">Enviar</button></div></div></div> : null}
+        {transferModal.open && !transferModal.genesys ? <div className="ui-overlay-fade fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-4 backdrop-blur-sm lg:items-center" onClick={closeTransferModal}><div className="ui-responsive-modal w-full max-w-xl rounded-[28px] bg-white p-5 shadow-2xl dark:bg-slate-900" onClick={(e) => e.stopPropagation()}><div className="flex items-start justify-between gap-4"><div><h3 className="text-lg font-bold text-slate-900 dark:text-white">Transferir atendimento</h3><p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Encaminhe {selectedChatName} para uma fila ou diretamente para outro agente.</p></div><button type="button" onClick={closeTransferModal} disabled={transferModal.submitting} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-slate-100 text-slate-600 disabled:opacity-50 dark:bg-slate-800 dark:text-slate-200"><XCircle size={18} /></button></div>{transferModal.loading ? <div className="mt-5 flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-5 text-sm font-semibold text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"><Loader2 size={18} className="animate-spin text-blue-500" />Carregando destinos...</div> : <div className="mt-5 space-y-4"><div className="grid grid-cols-2 gap-2 rounded-2xl bg-slate-100 p-1 dark:bg-slate-800"><button type="button" onClick={() => setTransferModal((prev) => ({ ...prev, mode: 'queue' }))} className={`rounded-2xl px-3 py-2 text-sm font-semibold transition-colors ${transferModal.mode === 'queue' ? 'bg-white text-blue-600 shadow-sm dark:bg-slate-700 dark:text-blue-300' : 'text-slate-500 dark:text-slate-300'}`}>Fila</button><button type="button" onClick={() => setTransferModal((prev) => ({ ...prev, mode: 'agent' }))} className={`rounded-2xl px-3 py-2 text-sm font-semibold transition-colors ${transferModal.mode === 'agent' ? 'bg-white text-blue-600 shadow-sm dark:bg-slate-700 dark:text-blue-300' : 'text-slate-500 dark:text-slate-300'}`}>Agente</button></div>{transferModal.mode === 'queue' ? <div><label className="mb-2 block text-sm font-semibold text-slate-800 dark:text-slate-100">Fila de destino</label><select value={transferModal.queue} onChange={(e) => setTransferModal((prev) => ({ ...prev, queue: e.target.value }))} className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white">{transferModal.queues.length === 0 ? <option value="">Nenhuma fila disponivel</option> : transferModal.queues.map((queue) => <option key={queue.id || queue.name} value={queue.name}>{queue.name}</option>)}</select></div> : <div><label className="mb-2 block text-sm font-semibold text-slate-800 dark:text-slate-100">Agente de destino</label><select value={transferModal.agentId} onChange={(e) => setTransferModal((prev) => ({ ...prev, agentId: e.target.value }))} className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white">{transferModal.agents.length === 0 ? <option value="">Nenhum agente disponivel</option> : transferModal.agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name || agent.username}{agent.queues?.length ? ` - ${agent.queues.join(', ')}` : ''}</option>)}</select></div>}<div><label className="mb-2 block text-sm font-semibold text-slate-800 dark:text-slate-100">Motivo opcional</label><textarea rows={3} value={transferModal.reason} onChange={(e) => setTransferModal((prev) => ({ ...prev, reason: e.target.value }))} placeholder="Ex: encaminhando para especialista..." className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></div><div className="flex flex-col gap-3 sm:flex-row"><button type="button" onClick={closeTransferModal} disabled={transferModal.submitting} className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Cancelar</button><button type="button" onClick={handleTransferChat} disabled={transferModal.submitting || (transferModal.mode === 'queue' ? !transferModal.queue : !transferModal.agentId)} className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">{transferModal.submitting ? <Loader2 size={16} className="animate-spin" /> : <ArrowRightLeft size={16} />}{transferModal.submitting ? 'Transferindo...' : 'Transferir'}</button></div></div>}</div></div> : null}
+        {showQuickModal ? <div className="ui-overlay-fade fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => { if (!quickSending) setShowQuickModal(false); }}><div className="ui-modal-surface w-full max-w-lg rounded-3xl bg-white p-5 shadow-2xl dark:bg-slate-900" onClick={(e) => e.stopPropagation()}><h3 className="mb-3 text-lg font-bold text-slate-900 dark:text-white">Mensagem rapida</h3><textarea disabled={quickSending} className="min-h-[160px] w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-wait disabled:opacity-70 dark:border-slate-700 dark:bg-slate-800 dark:text-white" value={quickDraft} onChange={(e) => setQuickDraft(e.target.value)} /><div className="mt-4 flex gap-3"><button type="button" disabled={quickSending} onClick={() => setShowQuickModal(false)} className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-wait disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Cancelar</button><button type="button" onClick={handleQuickSend} disabled={selectedChatReplyLocked || quickSending || !quickDraft.trim()} className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">{quickSending ? <Loader2 size={16} className="animate-spin" /> : null}{quickSending ? 'Enviando...' : 'Enviar'}</button></div></div></div> : null}
         {nameEditor.open ? (
           <div className="ui-overlay-fade fixed inset-0 z-50 flex items-end justify-center bg-black/55 p-3 backdrop-blur-sm sm:items-center" onClick={() => !nameEditor.saving && setNameEditor({ open: false, value: '', saving: false })}>
             <div className="ui-modal-surface max-h-[92vh] w-full max-w-2xl overflow-hidden rounded-3xl bg-white shadow-2xl dark:bg-slate-900" onClick={(e) => e.stopPropagation()}>

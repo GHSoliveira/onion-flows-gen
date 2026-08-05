@@ -40,9 +40,12 @@ import {
   relayAgentCloseToGenesys,
   relayBuscarIxc,
   relayRefreshIxcLogins,
+  relayRefreshExternalStatus,
   relayIxcOs,
   relayHydrateGenesys,
   relayGenesysWrapupCodes,
+  relaySearchGenesysTransferQueues,
+  relayTransferGenesysWithWrapup,
   relayFinalizeGenesysWithWrapup
 } from '../services/extensionAtendimento.js';
 import { buildAiMemoryContext, getActiveAiMemories } from '../services/aiMemories.js';
@@ -70,6 +73,26 @@ const genesysLocalFlushLimiter = rateLimit({
     error: 'Muitas limpezas em pouco tempo. Aguarde um minuto.'
   })
 });
+const genesysTransferSearchLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 8,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.user?.id || 'anonymous',
+  handler: (_req, res) => res.status(429).json({
+    error: 'Muitas pesquisas de fila. Aguarde um minuto.'
+  })
+});
+const genesysTransferLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 4,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.user?.id || 'anonymous',
+  handler: (_req, res) => res.status(429).json({
+    error: 'Muitas tentativas de transferencia. Aguarde um minuto.'
+  })
+});
 const aiTextImproveLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: 12,
@@ -86,7 +109,18 @@ const routerProbeLimiter = rateLimit({
   keyGenerator: (req) => `${req.user?.id || 'anonymous'}:${req.params?.id || 'chat'}`,
   handler: (_req, res) => res.status(429).json({ error: 'Muitos testes de roteador. Aguarde um minuto.' })
 });
-const ROUTER_WEB_PORTS = [9770, 9180, 8989, 38080, 8081, 80, 8888, 49975];
+const externalStatusRefreshLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 4,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.user?.id || 'anonymous',
+  handler: (_req, res) => res.status(429).json({
+    error: 'Muitas atualizacoes de rede. Aguarde um minuto.',
+    code: 'EXTERNAL_STATUS_RATE_LIMIT'
+  })
+});
+const ROUTER_WEB_PORTS = [9770, 9180, 8989, 38080, 8081, 8080, 80, 8888, 49975];
 const normalizeIpv4 = (value) => String(value || '').trim();
 const isCgnatIpv4 = (value) => {
   const parts = normalizeIpv4(value).split('.').map(Number);
@@ -1271,6 +1305,35 @@ router.post('/:id/refresh-ixc-logins', authenticate, authorize(CHAT_OPERATIONAL_
   }
 });
 
+router.post('/:id/refresh-external-status', authenticate, authorize(CHAT_OPERATIONAL_ROLES), requireTenant, externalStatusRefreshLimiter, async (req, res) => {
+  try {
+    const chat = await loadChatById(req, res, req.params.id);
+    if (!chat) return;
+    if (!isGenesysChat(chat)) {
+      return res.status(400).json({ error: 'Verificacao externa disponivel so em chats Genesys' });
+    }
+    if (!chat.agentId || String(chat.agentId) !== String(req.user?.id)) {
+      return res.status(403).json({ error: 'Este atendimento nao esta atribuido ao agente autenticado.' });
+    }
+    const result = await relayRefreshExternalStatus({
+      chat,
+      agentId: req.user?.id || chat.agentId || null
+    });
+    if (!result.ok && result.reason === 'extension_offline') {
+      return res.status(503).json({ error: 'Extensao APR offline', ...result });
+    }
+    if (!result.ok && !result.relayed) {
+      const message = result.reason === 'missing_network_identity'
+        ? 'OLT não disponível no Genesys e dados IXC ainda não consultados'
+        : (result.reason || 'falha ao verificar problemas externos');
+      return res.status(400).json({ error: message, ...result });
+    }
+    res.json({ ok: true, message: 'Verificacao externa solicitada a extensao', ...result });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.post('/:id/ixc-os', authenticate, authorize(CHAT_OPERATIONAL_ROLES), requireTenant, async (req, res) => {
   try {
     const chat = await loadChatById(req, res, req.params.id);
@@ -2026,6 +2089,77 @@ router.post('/pickup', authenticate, authorize(CHAT_OPERATIONAL_ROLES), requireT
 
     res.json(await sanitizeChatPayloadForViewer(req.tenantId, chat));
     });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/:id/genesys-transfer-queues', authenticate, authorize(CHAT_OPERATIONAL_ROLES), requireTenant, genesysTransferSearchLimiter, async (req, res) => {
+  try {
+    const chat = await loadChatById(req, res, asIdentifier(req.params?.id));
+    if (!chat) return;
+    if (req.user?.role === 'AGENT' && String(chat.agentId || '') !== String(req.user?.id || '')) {
+      return res.status(403).json({ error: 'Este atendimento nao esta sob sua responsabilidade.' });
+    }
+    const query = asIdentifier(req.query?.q, { maxLength: 60 }).replace(/\s+/g, ' ');
+    if (query.length < 2) {
+      return res.status(400).json({ error: 'Digite ao menos 2 caracteres para pesquisar a fila.' });
+    }
+    const result = await relaySearchGenesysTransferQueues({
+      chat,
+      agentId: req.user?.id || chat.agentId || null,
+      query
+    });
+    if (!result?.ok) {
+      const status = result?.reason === 'extension_offline' ? 503 : 400;
+      return res.status(status).json({ error: result?.error || result?.reason || 'Falha ao pesquisar filas', ...result });
+    }
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/:id/transfer-genesys', authenticate, authorize(CHAT_OPERATIONAL_ROLES), requireTenant, genesysTransferLimiter, async (req, res) => {
+  try {
+    const chat = await loadChatById(req, res, asIdentifier(req.params?.id));
+    if (!chat) return;
+    if (req.user?.role === 'AGENT' && String(chat.agentId || '') !== String(req.user?.id || '')) {
+      return res.status(403).json({ error: 'Este atendimento nao esta sob sua responsabilidade.' });
+    }
+    const result = await relayTransferGenesysWithWrapup({
+      chat,
+      agentId: req.user?.id || chat.agentId || null,
+      queueId: asIdentifier(req.body?.queueId),
+      queueName: String(req.body?.queueName || ''),
+      divisionId: asIdentifier(req.body?.divisionId),
+      wrapupCode: asIdentifier(req.body?.wrapupCode),
+      wrapupName: String(req.body?.wrapupName || ''),
+      notes: String(req.body?.notes || '')
+    });
+    if (!result?.ok) {
+      const status = result?.reason === 'extension_offline'
+        ? 503
+        : result?.transferred === true
+          ? 502
+          : 400;
+      return res.status(status).json({
+        error: result?.error || result?.reason || 'Falha ao transferir no Genesys',
+        ...result
+      });
+    }
+    await createLog('GENESYS_TRANSFER_CONFIRMED', {
+      tenantId: req.tenantId,
+      chatId: chat.id,
+      convId: resolveGenesysConvId(chat),
+      agentId: req.user?.id || chat.agentId || null,
+      participantId: result.participantId || null,
+      queueId: result.queueId || null,
+      queueName: result.queueName || null,
+      wrapupCode: result.wrapupCode || null,
+      wrapupName: result.wrapupName || null
+    }, req.user?.id || null);
+    res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

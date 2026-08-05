@@ -108,6 +108,7 @@ const normalizeMessageMedia = (message) => {
     }
   }
 
+  const tokenMediaType = inferMediaTypeByToken(text);
   const mediaUrl = (
     media.url
     || media.mediaUrl
@@ -118,13 +119,12 @@ const normalizeMessageMedia = (message) => {
     || message.filePath
     || message.storagePath
     || message.meta?.mediaUrl
-    || message.meta?.url
     || message.meta?.fileUrl
     || message.meta?.attachmentUrl
     || message.meta?.path
     || message.meta?.filePath
     || message.meta?.storagePath
-    || extractFirstMediaUrl(text)
+    || (tokenMediaType ? extractFirstMediaUrl(text) : '')
   );
 
   if (!mediaUrl) {
@@ -173,7 +173,7 @@ const normalizeMessageMedia = (message) => {
   ).trim().toLowerCase();
 
   const inferredType = (
-    inferMediaTypeByToken(text)
+    tokenMediaType
     || inferMediaTypeByMime(mimeType)
     || inferMediaTypeByFileName(fileName)
     || inferMediaTypeByUrl(mediaUrl)

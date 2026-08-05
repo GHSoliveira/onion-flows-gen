@@ -39,7 +39,7 @@ const Login = () => {
       brandName="Onion Flows"
       title="Acesse sua conta"
       subtitle="Use suas credenciais da equipe Onion Flows."
-      build="5.3.6"
+      build="5.3.17"
       region="Goioerê"
       transitionDuration={3600}
     />

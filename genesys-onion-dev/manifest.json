@@ -1,0 +1,64 @@
+{
+  "manifest_version": 3,
+  "name": "Genesys Onion Dev",
+  "version": "0.1.13",
+  "description": "Extensão isolada para testar o espelhamento Genesys para Onion.",
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_title": "Genesys Onion Dev",
+    "default_popup": "popup.html"
+  },
+  "permissions": ["storage", "alarms", "tabs"],
+  "host_permissions": [
+    "https://apps.sae1.pure.cloud/*",
+    "https://api.sae1.pure.cloud/*",
+    "https://api-downloads.sae1.pure.cloud/*",
+    "https://fileupload.sae1.pure.cloud/*",
+    "https://sistema.zaaztelecom.com.br/*",
+    "https://nocview.zaaz.com.br/*",
+    "https://grafana2.zaaz.com.br/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://sistema.zaaztelecom.com.br/*"],
+      "js": ["ixc-id-capture.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://apps.sae1.pure.cloud/*"],
+      "js": ["content.js"],
+      "all_frames": true,
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://apps.sae1.pure.cloud/*"],
+      "js": ["genesys-token.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://apps.sae1.pure.cloud/*"],
+      "js": ["genesys-focus.js"],
+      "world": "MAIN",
+      "all_frames": true,
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://nocview.zaaz.com.br/*"],
+      "js": ["nocview-inject.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://nocview.zaaz.com.br/*"],
+      "js": ["nocview-content.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://grafana2.zaaz.com.br/*"],
+      "js": ["grafana-content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

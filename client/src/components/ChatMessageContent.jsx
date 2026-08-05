@@ -70,8 +70,13 @@ const extractFirstUrl = (value) => {
 const extractFileNameFromUrl = (value) => {
   const url = String(value || '').trim();
   if (!url) return null;
-  const cleanUrl = url.split('?')[0].split('#')[0];
-  const parts = cleanUrl.split('/');
+  let pathname = url;
+  try {
+    pathname = new URL(url, 'http://localhost').pathname;
+  } catch {
+    pathname = url.split('?')[0].split('#')[0];
+  }
+  const parts = pathname.split('/');
   const lastPart = parts[parts.length - 1] || '';
   if (!lastPart || !/\.[a-z0-9]{2,8}$/i.test(lastPart)) return null;
   try {
@@ -111,25 +116,24 @@ const normalizeMediaPayload = (message) => {
   }
 
   const textValue = String(message?.text || '').trim();
+  const tokenType = inferTypeByToken(message?.text);
   const mediaUrl = (
     media.url
     || media.mediaUrl
     || (typeof message?.media === 'string' ? String(message.media || '').trim() : '')
     || (typeof message?.attachment === 'string' ? String(message.attachment || '').trim() : '')
     || message?.mediaUrl
-    || message?.url
     || message?.fileUrl
     || message?.path
     || message?.filePath
     || message?.storagePath
     || message?.meta?.mediaUrl
-    || message?.meta?.url
     || message?.meta?.fileUrl
     || message?.meta?.path
     || message?.meta?.filePath
     || message?.meta?.storagePath
     || message?.attachmentUrl
-    || extractFirstUrl(textValue)
+    || (tokenType ? extractFirstUrl(textValue) : '')
   );
   if (!mediaUrl) return null;
 
@@ -174,7 +178,6 @@ const normalizeMediaPayload = (message) => {
     || ''
   ).trim().toLowerCase();
   const normalizedKind = inferTypeByKindLike(directKind);
-  const tokenType = inferTypeByToken(message?.text);
   const inferredType =
     tokenType
     || inferTypeByMime(mimeType)

@@ -6,49 +6,16 @@ import compression from 'compression';
 import rateLimit from 'express-rate-limit';
 import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import adapter from './db/DatabaseAdapter.js';
 import { setIo } from './src/services/logs.js';
 import { markOffline } from './src/services/userStatus.js';
 import { authenticate } from './src/middleware/auth.js';
-import { authRouter } from './src/routes/index.js';
-import { tenantsRouter } from './src/routes/index.js';
-import { usersRouter } from './src/routes/index.js';
-import { flowsRouter } from './src/routes/index.js';
-import { variablesRouter } from './src/routes/index.js';
-import { templatesRouter } from './src/routes/index.js';
-import { schedulesRouter } from './src/routes/index.js';
-import { queuesRouter } from './src/routes/index.js';
-import { tagsRouter } from './src/routes/index.js';
-import { webhooksRouter } from './src/routes/index.js';
-import { chatsRouter } from './src/routes/index.js';
-import { cannedResponsesRouter } from './src/routes/index.js';
-import { aiMemoriesRouter } from './src/routes/index.js';
-import { logsRouter } from './src/routes/index.js';
-import { superAdminRouter } from './src/routes/index.js';
 import { superAdminIpWhitelist, superAdminIpCheck } from './src/middleware/superAdminIp.js';
-import { tenantCurrentHandler } from './src/routes/index.js';
-import { telegramRouter } from './src/routes/index.js';
-import { channelsRouter } from './src/routes/index.js';
-import { whatsappRouter } from './src/routes/index.js';
-import { metricsRouter } from './src/routes/index.js';
-import { catalogRouter } from './src/routes/index.js';
-import { mediaRouter } from './src/routes/index.js';
-import { contactsRouter } from './src/routes/index.js';
-import { reportsRouter } from './src/routes/index.js';
-import { analyticsRouter } from './src/routes/index.js';
-import { loadTestRouter } from './src/routes/index.js';
-import { systemRouter } from './src/routes/index.js';
-import { startTelegramPolling } from './src/services/telegramPolling.js';
-import { startDbChangeLogger } from './src/services/dbChangeLogger.js';
-import { startOutreachCampaignWorker } from './src/services/outreachCampaignWorker.js';
-import { startChatRuntimeWatcher } from './src/services/chatRuntimeWatcher.js';
-import { startDataRetentionWorker } from './src/services/dataRetentionWorker.js';
 import { repairAllChatStates } from './src/services/chatStateGuard.js';
-import { closeRedis, getRedisStatus, initRedis, isBullMqEnabled } from './src/services/redisClient.js';
-import { closeQueues } from './src/queues/index.js';
-import { closeBullMqWorkers, startBullMqWorkers } from './src/workers/index.js';
+import { uploadsRoot } from './src/services/mediaStorage.js';
 import jwt from 'jsonwebtoken';
 import { JWT_SECRET_VALUE } from './src/config/constants.js';
 import {
@@ -56,6 +23,108 @@ import {
   isExtensionSocket,
   extensionRoomForAgent
 } from './src/services/extensionAtendimento.js';
+
+const COMPANION_MODE_EARLY = ['1', 'true', 'yes', 'on'].includes(
+  String(process.env.COMPANION_MODE || '').trim().toLowerCase()
+);
+const COMPANION_USES_LOCAL_JSON_EARLY = ['1', 'true', 'yes', 'on'].includes(
+  String(process.env.USE_JSON_DB || '').trim().toLowerCase()
+) || String(process.env.DB_ADAPTER || '').trim().toLowerCase() === 'json';
+
+if (COMPANION_MODE_EARLY && !COMPANION_USES_LOCAL_JSON_EARLY) {
+  throw new Error('COMPANION_MODE exige DB_ADAPTER=json; banco remoto foi bloqueado');
+}
+
+const routeBundle = COMPANION_MODE_EARLY
+  ? await (async () => {
+      const [
+        auth, tenants, users, variables, templates, schedules, queues, tags,
+        chats, cannedResponses, aiMemories, logs, metrics, media, contacts,
+        loadTest, system
+      ] = await Promise.all([
+        import('./src/routes/auth.js'),
+        import('./src/routes/tenants.js'),
+        import('./src/routes/users.js'),
+        import('./src/routes/variables.js'),
+        import('./src/routes/templates.js'),
+        import('./src/routes/schedules.js'),
+        import('./src/routes/queues.js'),
+        import('./src/routes/tags.js'),
+        import('./src/routes/chats.js'),
+        import('./src/routes/cannedResponses.js'),
+        import('./src/routes/aiMemories.js'),
+        import('./src/routes/logs.js'),
+        import('./src/routes/metrics.js'),
+        import('./src/routes/media.js'),
+        import('./src/routes/contacts.js'),
+        import('./src/routes/loadTest.js'),
+        import('./src/routes/system.js')
+      ]);
+      return {
+        authRouter: auth.default,
+        tenantsRouter: tenants.default,
+        tenantCurrentHandler: tenants.tenantCurrentHandler,
+        usersRouter: users.default,
+        variablesRouter: variables.default,
+        templatesRouter: templates.default,
+        schedulesRouter: schedules.default,
+        queuesRouter: queues.default,
+        tagsRouter: tags.default,
+        chatsRouter: chats.default,
+        cannedResponsesRouter: cannedResponses.default,
+        aiMemoriesRouter: aiMemories.default,
+        logsRouter: logs.default,
+        metricsRouter: metrics.default,
+        mediaRouter: media.default,
+        contactsRouter: contacts.default,
+        loadTestRouter: loadTest.default,
+        systemRouter: system.default
+      };
+    })()
+  : await import('./src/routes/index.js');
+
+const {
+  authRouter, tenantsRouter, usersRouter, flowsRouter, variablesRouter,
+  templatesRouter, schedulesRouter, queuesRouter, tagsRouter, webhooksRouter,
+  chatsRouter, cannedResponsesRouter, aiMemoriesRouter, logsRouter,
+  superAdminRouter, tenantCurrentHandler, telegramRouter, channelsRouter,
+  whatsappRouter, metricsRouter, catalogRouter, mediaRouter, contactsRouter,
+  reportsRouter, analyticsRouter, loadTestRouter, systemRouter
+} = routeBundle;
+
+let startTelegramPolling = () => {};
+let startDbChangeLogger = async () => {};
+let startOutreachCampaignWorker = () => {};
+let startChatRuntimeWatcher = () => {};
+let startDataRetentionWorker = () => {};
+let closeRedis = async () => {};
+let getRedisStatus = () => ({ ready: false });
+let initRedis = async () => {};
+let isBullMqEnabled = () => false;
+let closeQueues = async () => {};
+let closeBullMqWorkers = async () => {};
+let startBullMqWorkers = async () => {};
+
+if (!COMPANION_MODE_EARLY) {
+  const [telegramPolling, dbChangeLogger, outreachWorker, runtimeWatcher, retentionWorker, redis, queues, workers] = await Promise.all([
+    import('./src/services/telegramPolling.js'),
+    import('./src/services/dbChangeLogger.js'),
+    import('./src/services/outreachCampaignWorker.js'),
+    import('./src/services/chatRuntimeWatcher.js'),
+    import('./src/services/dataRetentionWorker.js'),
+    import('./src/services/redisClient.js'),
+    import('./src/queues/index.js'),
+    import('./src/workers/index.js')
+  ]);
+  startTelegramPolling = telegramPolling.startTelegramPolling;
+  startDbChangeLogger = dbChangeLogger.startDbChangeLogger;
+  startOutreachCampaignWorker = outreachWorker.startOutreachCampaignWorker;
+  startChatRuntimeWatcher = runtimeWatcher.startChatRuntimeWatcher;
+  startDataRetentionWorker = retentionWorker.startDataRetentionWorker;
+  ({ closeRedis, getRedisStatus, initRedis, isBullMqEnabled } = redis);
+  ({ closeQueues } = queues);
+  ({ closeBullMqWorkers, startBullMqWorkers } = workers);
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -84,12 +153,13 @@ const envFlag = (name, defaultValue = false) => {
 const CHAT_STATE_REPAIR_ON_BOOT = envFlag('CHAT_STATE_REPAIR_ON_BOOT', false);
 const CHAT_RUNTIME_WATCHER_ENABLED = envFlag('CHAT_RUNTIME_WATCHER_ENABLED', false);
 const DB_CHANGE_LOGGER_ENABLED = envFlag('DB_CHANGE_LOGGER_ENABLED', false);
-const OUTREACH_CAMPAIGN_WORKER_ENABLED = envFlag('OUTREACH_CAMPAIGN_WORKER_ENABLED', true);
-
+const COMPANION_MODE = COMPANION_MODE_EARLY;
+const OUTREACH_CAMPAIGN_WORKER_ENABLED = envFlag('OUTREACH_CAMPAIGN_WORKER_ENABLED', !COMPANION_MODE);
 try {
   await adapter.init();
-  await initRedis();
-  console.log('✅ MongoDB inicializado');
+  if (!COMPANION_MODE) await initRedis();
+  else console.log('[COMPANION] Redis e filas externas desativados');
+  console.log(COMPANION_MODE ? '[COMPANION] Armazenamento JSON local inicializado' : 'Banco de dados inicializado');
   if (CHAT_STATE_REPAIR_ON_BOOT) {
     const chatRepairSummary = await repairAllChatStates({ log: true });
     if (chatRepairSummary?.repaired) {
@@ -103,7 +173,7 @@ try {
   } else {
     console.log('[DB_CHANGE_LOGGER] Desligado por configuracao');
   }
-  await startBullMqWorkers();
+  if (!COMPANION_MODE) await startBullMqWorkers();
   const bullMqOperational = isBullMqEnabled() && getRedisStatus().ready;
   if (OUTREACH_CAMPAIGN_WORKER_ENABLED && !bullMqOperational) {
     startOutreachCampaignWorker();
@@ -117,7 +187,7 @@ try {
   } else {
     console.log('[CHAT_RUNTIME_WATCHER] Desligado por configuracao');
   }
-  startDataRetentionWorker();
+  if (!COMPANION_MODE) startDataRetentionWorker();
 } catch (error) {
   console.error('❌ Falha ao conectar ao MongoDB:', error.message);
   process.exit(1);
@@ -464,27 +534,27 @@ app.use('/api/auth', authRouter);
 // Apply on routes that expose tenant-wide or cross-tenant admin actions.
 app.use('/api/tenants', superAdminIpCheck, tenantsRouter);
 app.use('/api/users', superAdminIpCheck, usersRouter);
-app.use('/api/flows', superAdminIpCheck, flowsRouter);
+if (flowsRouter) app.use('/api/flows', superAdminIpCheck, flowsRouter);
 app.use('/api/variables', variablesRouter);
 app.use('/api/templates', superAdminIpCheck, templatesRouter);
 app.use('/api/schedules', schedulesRouter);
 app.use('/api/queues', superAdminIpCheck, queuesRouter);
 app.use('/api/tags', tagsRouter);
-app.use('/api/webhooks', superAdminIpCheck, webhooksRouter);
+if (webhooksRouter) app.use('/api/webhooks', superAdminIpCheck, webhooksRouter);
 app.use('/api/chats', chatsRouter);
 app.use('/api/cannedResponses', cannedResponsesRouter);
 app.use('/api/ai-memories', aiMemoriesRouter);
 app.use('/api/logs', superAdminIpWhitelist, logsRouter);
-app.use('/api/super-admin', superAdminIpWhitelist, superAdminRouter);
-app.use('/api/telegram', telegramRouter);
-app.use('/api/channels', superAdminIpCheck, channelsRouter);
-app.use('/api/whatsapp', whatsappRouter);
+if (superAdminRouter) app.use('/api/super-admin', superAdminIpWhitelist, superAdminRouter);
+if (telegramRouter) app.use('/api/telegram', telegramRouter);
+if (channelsRouter) app.use('/api/channels', superAdminIpCheck, channelsRouter);
+if (whatsappRouter) app.use('/api/whatsapp', whatsappRouter);
 app.use('/api/metrics', metricsRouter);
-app.use('/api/catalog', catalogRouter);
+if (catalogRouter) app.use('/api/catalog', catalogRouter);
 app.use('/api/media', mediaRouter);
 app.use('/api/contacts', contactsRouter);
-app.use('/api/reports', reportsRouter);
-app.use('/api/analytics', analyticsRouter);
+if (reportsRouter) app.use('/api/reports', reportsRouter);
+if (analyticsRouter) app.use('/api/analytics', analyticsRouter);
 app.use('/api/load-test', loadTestRouter);
 app.use('/api/system', superAdminIpCheck, systemRouter);
 app.use('/uploads', (req, res, next) => {
@@ -502,9 +572,20 @@ app.use('/uploads', (req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', origin);
   }
   next();
-}, express.static(path.join(__dirname, 'uploads')));
+}, express.static(uploadsRoot));
 
-app.use(express.static(path.join(__dirname, '../client/dist')));
+const clientDistPath = path.join(__dirname, 'client', 'dist');
+app.use(express.static(clientDistPath));
+
+// SPA local: rotas do React retornam o mesmo bundle, sem servidor Vite/HMR.
+app.use((req, res, next) => {
+  if (req.method !== 'GET' || req.path.startsWith('/api/') || req.path.startsWith('/uploads/')) {
+    return next();
+  }
+  const indexPath = path.join(clientDistPath, 'index.html');
+  if (!fs.existsSync(indexPath)) return next();
+  return res.sendFile(indexPath);
+});
 
 // Global error handler — hide internal details in production
 app.use((err, req, res, _next) => {
@@ -516,9 +597,9 @@ app.use((err, req, res, _next) => {
   res.status(status).json({ error: err.message || 'Erro interno do servidor' });
 });
 
-httpServer.listen(PORT, () => {
+httpServer.listen(PORT, '127.0.0.1', () => {
   console.log(`✅ Servidor rodando na porta ${PORT}`);
-  if (process.env.TELEGRAM_USE_POLLING === 'true') {
+  if (!COMPANION_MODE && process.env.TELEGRAM_USE_POLLING === 'true') {
     console.log('✅ Telegram polling ativo');
     startTelegramPolling();
   }

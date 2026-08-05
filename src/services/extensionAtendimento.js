@@ -245,6 +245,14 @@ const buildClienteVars = (cliente = {}) => {
       // Payload IXC inválido não impede a atualização dos campos básicos.
     }
   }
+  if (cliente.externalNetwork && typeof cliente.externalNetwork === 'object' && !Array.isArray(cliente.externalNetwork)) {
+    try {
+      const serialized = JSON.stringify(cliente.externalNetwork);
+      if (serialized.length <= 100000) vars.external_network = sanitizeIxcData(JSON.parse(serialized));
+    } catch (_) {
+      // Resultado externo inválido não impede os demais dados primários Genesys.
+    }
+  }
   return {
     vars,
     nomeIxc,
@@ -295,11 +303,12 @@ const emitToAgentPanel = (chat, eventName, payload) => {
   if (!io || !chat?.tenantId) return;
 
   const roomTenant = `tenant:${chat.tenantId}`;
-  io.to(roomTenant).emit(eventName, payload);
-
-  if (chat.agentId) {
-    io.to(`agent:${chat.agentId}`).emit(eventName, payload);
-  }
+  const target = chat.agentId
+    ? io.to(roomTenant).to(`agent:${chat.agentId}`)
+    : io.to(roomTenant);
+  // Socket.IO trata múltiplas salas encadeadas como união: um socket que está
+  // nas salas do tenant e do agente recebe o evento apenas uma vez.
+  target.emit(eventName, payload);
 };
 
 const pickNewestChat = (rows = []) => {
@@ -1122,20 +1131,88 @@ export const emitCmdToExtension = async (agentId, eventName, payload = {}) => {
   return { ok: true, relayed: true, reason: null, listeners };
 };
 
+const GENESYS_COMMAND_TTL_MS = 10 * 60 * 1000;
+const GENESYS_COMMAND_MAX = 500;
+const genesysCommandOutbox = new Map();
+
+const pruneGenesysCommandOutbox = (now = Date.now()) => {
+  for (const [commandId, entry] of genesysCommandOutbox) {
+    if (now - Number(entry?.updatedAt || entry?.createdAt || 0) > GENESYS_COMMAND_TTL_MS) {
+      genesysCommandOutbox.delete(commandId);
+    }
+  }
+  while (genesysCommandOutbox.size > GENESYS_COMMAND_MAX) {
+    genesysCommandOutbox.delete(genesysCommandOutbox.keys().next().value);
+  }
+};
+
+const emitCommandAttempt = async ({ io, agentId, eventName, payload, timeoutMs }) => new Promise((resolve) => {
+  io.timeout(timeoutMs).to(extensionRoomForAgent(agentId)).emit(eventName, payload, (error, responses = []) => {
+    const response = responses.find((item) => item?.ok === true) || responses[0];
+    if (response && typeof response === 'object') resolve(response);
+    else if (error) resolve({ ok: false, reason: 'extension_timeout', error: error.message || 'timeout' });
+    else resolve({ ok: false, reason: 'invalid_extension_ack' });
+  });
+});
+
 export const emitCmdToExtensionWithAck = async (agentId, eventName, payload = {}, timeoutMs = 15000) => {
   const io = getIo();
   if (!io || !agentId) return { ok: false, reason: 'no_io_or_agent' };
   const listeners = await countExtensionSockets(agentId);
   if (listeners <= 0) return { ok: false, reason: 'extension_offline' };
-  return new Promise((resolve) => {
-    io.timeout(timeoutMs).to(extensionRoomForAgent(agentId)).emit(eventName, payload, (error, responses = []) => {
-      const response = responses.find((item) => item?.ok === true) || responses[0];
-      if (response && typeof response === 'object') resolve(response);
-      else if (error) resolve({ ok: false, reason: 'extension_timeout', error: error.message || 'timeout' });
-      else resolve({ ok: false, reason: 'invalid_extension_ack' });
-    });
-  });
+  const now = Date.now();
+  pruneGenesysCommandOutbox(now);
+  const commandId = pickString(payload.commandId) || generateId('gcmd');
+  const envelope = {
+    ...payload,
+    commandId,
+    createdAt: Number(payload.createdAt || now),
+    expiresAt: Number(payload.expiresAt || (now + Math.max(30000, timeoutMs * 2)))
+  };
+  const existing = genesysCommandOutbox.get(commandId);
+  if (existing?.status === 'confirmed' && existing.result) return existing.result;
+  if (existing?.promise) return existing.promise;
+
+  const entry = existing || {
+    commandId,
+    eventName,
+    status: 'pending',
+    attempts: 0,
+    createdAt: now,
+    updatedAt: now,
+    result: null,
+    promise: null
+  };
+  const operation = (async () => {
+    let result = null;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      entry.status = 'sent_to_extension';
+      entry.attempts = attempt;
+      entry.updatedAt = Date.now();
+      result = await emitCommandAttempt({ io, agentId, eventName, payload: envelope, timeoutMs });
+      if (result?.ok === true) break;
+      if (!['extension_timeout', 'invalid_extension_ack'].includes(result?.reason)) break;
+      if (Date.now() >= envelope.expiresAt) break;
+    }
+    entry.status = result?.ok === true ? 'confirmed' : (Date.now() >= envelope.expiresAt ? 'expired' : 'failed');
+    entry.result = { ...result, commandId, attempts: entry.attempts };
+    entry.updatedAt = Date.now();
+    entry.promise = null;
+    return entry.result;
+  })();
+  entry.promise = operation;
+  genesysCommandOutbox.set(commandId, entry);
+  return operation;
 };
+
+export const getGenesysCommandOutboxSnapshot = () => [...genesysCommandOutbox.values()].map((entry) => ({
+  commandId: entry.commandId,
+  eventName: entry.eventName,
+  status: entry.status,
+  attempts: entry.attempts,
+  createdAt: entry.createdAt,
+  updatedAt: entry.updatedAt
+}));
 
 export const relayGenesysWrapupCodes = async ({ chat, agentId = null } = {}) => {
   if (!isGenesysChat(chat)) return { ok: false, reason: 'not_genesys' };
@@ -1146,6 +1223,56 @@ export const relayGenesysWrapupCodes = async ({ chat, agentId = null } = {}) => 
   return emitCmdToExtensionWithAck(targetAgentId, 'cmd:listar_tabulacoes', {
     convId, chatId: chat.id, agentId: targetAgentId, ts: Date.now()
   });
+};
+
+export const relaySearchGenesysTransferQueues = async ({
+  chat, agentId = null, query = ''
+} = {}) => {
+  if (!isGenesysChat(chat)) return { ok: false, reason: 'not_genesys' };
+  const convId = resolveGenesysConvId(chat);
+  const targetAgentId = agentId || chat.agentId || null;
+  const normalizedQuery = pickString(query).replace(/\s+/g, ' ').slice(0, 60);
+  if (!convId) return { ok: false, reason: 'missing_convId' };
+  if (!targetAgentId) return { ok: false, reason: 'missing_agentId' };
+  if (normalizedQuery.length < 2) return { ok: false, reason: 'query_too_short' };
+  return emitCmdToExtensionWithAck(targetAgentId, 'cmd:buscar_filas_transferencia', {
+    convId,
+    chatId: chat.id,
+    query: normalizedQuery,
+    agentId: targetAgentId,
+    ts: Date.now()
+  }, 35000);
+};
+
+export const relayTransferGenesysWithWrapup = async ({
+  chat,
+  agentId = null,
+  queueId,
+  queueName = '',
+  divisionId = '',
+  wrapupCode,
+  wrapupName = '',
+  notes = ''
+} = {}) => {
+  if (!isGenesysChat(chat)) return { ok: false, reason: 'not_genesys' };
+  const convId = resolveGenesysConvId(chat);
+  const targetAgentId = agentId || chat.agentId || null;
+  if (!convId) return { ok: false, reason: 'missing_convId' };
+  if (!targetAgentId) return { ok: false, reason: 'missing_agentId' };
+  if (!GENESYS_UUID_RE.test(String(queueId || ''))) return { ok: false, reason: 'queue_id_invalid' };
+  if (!GENESYS_UUID_RE.test(String(wrapupCode || ''))) return { ok: false, reason: 'wrapup_code_invalid' };
+  return emitCmdToExtensionWithAck(targetAgentId, 'cmd:transferir_com_tabulacao', {
+    convId,
+    chatId: chat.id,
+    queueId: String(queueId),
+    queueName: pickString(queueName),
+    divisionId: GENESYS_UUID_RE.test(String(divisionId || '')) ? String(divisionId) : '',
+    wrapupCode: String(wrapupCode),
+    wrapupName: pickString(wrapupName),
+    notes: String(notes || '').slice(0, 1000),
+    agentId: targetAgentId,
+    ts: Date.now()
+  }, 45000);
 };
 
 export const relayFinalizeGenesysWithWrapup = async ({
@@ -1191,7 +1318,7 @@ export const relayAgentMessageToGenesys = async ({
   }
 
   const payload = {
-    commandId: generateId('gcmd'),
+    commandId: `gcmd_${chat.id}_${message?.id || message?.messageId || generateId('msg')}`,
     convId,
     communicationId: pickString(chat.genesysCommunicationId) || null,
     expectedGeneration: pickString(chat.genesysSyncGeneration) || null,
@@ -1269,7 +1396,7 @@ export const relayAgentMediaToGenesys = async ({
   }
 
   const payload = {
-    commandId: generateId('gmedia'),
+    commandId: `gmedia_${chat.id}_${message?.id || message?.messageId || generateId('msg')}`,
     convId,
     communicationId: pickString(chat.genesysCommunicationId) || null,
     expectedGeneration: pickString(chat.genesysSyncGeneration) || null,
@@ -1400,6 +1527,49 @@ export const relayRefreshIxcLogins = async ({ chat, agentId = null } = {}) => {
   };
   const result = await emitCmdToExtension(targetAgentId, 'cmd:refresh_ixc_logins', payload);
   return { ...result, convId, clientId };
+};
+
+export const relayRefreshExternalStatus = async ({ chat, agentId = null } = {}) => {
+  if (!isGenesysChat(chat)) return { ok: false, relayed: false, reason: 'not_genesys' };
+  const convId = resolveGenesysConvId(chat);
+  const targetAgentId = agentId || chat.agentId || null;
+  if (!convId) return { ok: false, relayed: false, reason: 'missing_convId' };
+  if (!targetAgentId) return { ok: false, relayed: false, reason: 'missing_agentId' };
+  const ixcLogins = Array.isArray(chat?.ixcData?.logins)
+    ? chat.ixcData.logins.filter((login) => login?.active === true).slice(0, 30)
+    : [];
+  const storedExternalNetwork = chat?.vars?.external_network || chat?.variables?.external_network || null;
+  const genesysLogins = Array.isArray(storedExternalNetwork?.logins)
+    ? storedExternalNetwork.logins.filter((login) => login?.active === true).slice(0, 30)
+    : [];
+  const genesysOlt = pickString(chat?.vars?.olt, chat?.variables?.olt);
+  const genesysPon = pickString(chat?.vars?.pon_id, chat?.variables?.pon_id);
+  const genesysFallback = genesysOlt
+    ? [{
+      loginId: `genesys_${convId}`,
+      active: true,
+      online: null,
+      source: 'genesys',
+      oltName: genesysOlt,
+      ponId: genesysPon || '',
+      pppoeUser: pickString(chat?.vars?.pppoe, chat?.variables?.pppoe),
+      ipv4: pickString(chat?.vars?.ip, chat?.variables?.ip)
+    }]
+    : [];
+  const networkSource = ixcLogins.length ? 'ixc' : 'genesys';
+  const logins = ixcLogins.length ? ixcLogins : (genesysLogins.length ? genesysLogins : genesysFallback);
+  if (!logins.length) return { ok: false, relayed: false, reason: 'missing_network_identity' };
+
+  const payload = {
+    convId,
+    chatId: chat.id,
+    logins,
+    networkSource,
+    ts: Date.now(),
+    agentId: targetAgentId
+  };
+  const result = await emitCmdToExtension(targetAgentId, 'cmd:refresh_external_status', payload);
+  return { ...result, convId, networkSource };
 };
 
 export const relayIxcOs = async ({ chat, agentId = null, operation = {} } = {}) => {

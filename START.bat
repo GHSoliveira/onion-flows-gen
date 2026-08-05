@@ -94,7 +94,7 @@ if errorlevel 1 (
 echo.
 echo ============================================
 echo  Pronto - servicos verificados!
-echo  Frontend: http://127.0.0.1:30999
+echo  Frontend: http://127.0.0.1:3101
 echo  API:      http://127.0.0.1:3101
 echo  Health:   http://127.0.0.1:3101/health
 echo.

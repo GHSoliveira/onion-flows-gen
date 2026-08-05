@@ -28,9 +28,13 @@ class SocketService {
   }
 
   setupEventListeners() {
-    this.socket.on('connect', () => {});
+    this.socket.on('connect', () => {
+      this.emit('connect', { connectedAt: Date.now() });
+    });
 
-    this.socket.on('disconnect', () => {});
+    this.socket.on('disconnect', (reason) => {
+      this.emit('disconnect', { reason, disconnectedAt: Date.now() });
+    });
 
     this.socket.on('error', (error) => {
       console.error('Socket error:', error);
@@ -54,6 +58,22 @@ class SocketService {
 
     this.socket.on('chat_closed', (data) => {
       this.emit('chat_closed', data);
+    });
+
+    this.socket.on('chat_updated', (data) => {
+      this.emit('chat_updated', data);
+    });
+
+    this.socket.on('message_delivery', (data) => {
+      this.emit('message_delivery', data);
+    });
+
+    this.socket.on('genesys_cmd_result', (data) => {
+      this.emit('genesys_cmd_result', data);
+    });
+
+    this.socket.on('genesys_cmd_failed', (data) => {
+      this.emit('genesys_cmd_failed', data);
     });
 
     this.socket.on('chat_event', (data) => {
@@ -116,6 +136,10 @@ class SocketService {
 
   sendHeartbeat() {
     this.socket.emit('heartbeat');
+  }
+
+  isConnected() {
+    return this.socket?.connected === true;
   }
 
   on(event, callback) {

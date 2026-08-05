@@ -1,32 +1,59 @@
-# Onion Flows — pacote local (sandbox) — ultima versao
+# Onion Flows — pacote local companion
 
-Versao publicada: 5.3.6
+Versão publicada: 5.3.17
 
 ## Requisitos
+
 - Windows 10/11
-- Node.js 20+ (https://nodejs.org) com npm
-- Portas livres: 3101 (API) e 30999 (frontend)
+- Node.js 20+ com npm
+- Porta local 3101 livre
 
 ## Como rodar
-1. Extraia este zip ou clone o repositorio
-2. Execute START.bat; a configuracao local sera criada e validada automaticamente
-3. Abra http://127.0.0.1:30999
 
-## Logins
-- Super admin: admin / sandbox123
-- Agente: agent / sandbox123
+1. Extraia o pacote ou clone o repositório.
+2. Execute `START.bat`; a configuração local será criada e validada automaticamente.
+3. Abra http://127.0.0.1:3101.
+
+## Logins locais iniciais
+
+- Super admin: `admin` / `sandbox123`
+- Agente: `agent` / `sandbox123`
 
 ## URLs
-- Frontend: http://127.0.0.1:30999
-- API: http://127.0.0.1:3101
-- Seed: POST /api/load-test/seed-client
 
-## Genesys (fases 1-4)
-- Extensao → app: ext:atendimento:*
-- App → extensao: cmd:enviar_mensagem, cmd:enviar_midia, cmd:encerrar
-- Ack: cmd:resultado
-- Conectar extensao com auth.client = "genesys-extension"
-Ver: integracao-genesys-onionflows.md
+- Frontend e API: http://127.0.0.1:3101
+- Health check: http://127.0.0.1:3101/health
+- Seed sintético: `POST /api/load-test/seed-client`
+
+## Extensão integradora Genesys
+
+A extensão local está em `genesys-onion-dev/`.
+
+1. Abra `chrome://extensions`.
+2. Ative o modo do desenvolvedor.
+3. Escolha **Carregar sem compactação**.
+4. Selecione a pasta `genesys-onion-dev`.
+5. No popup, use `http://127.0.0.1:3101`, autentique e ative.
+
+O Genesys permanece como motor principal. A extensão usa somente a sessão normal do usuário no navegador e não envia tokens Genesys ao Onion.
+
+Contrato resumido:
+
+- Extensão → app: `ext:atendimento:*`
+- App → extensão: `cmd:enviar_mensagem`, `cmd:enviar_midia`, transferência, tabulação e hidratação
+- Confirmação: ACK Socket.IO e `cmd:resultado`
+
+Veja [integracao-genesys-onionflows.md](integracao-genesys-onionflows.md).
 
 ## Parar
-STOP.bat
+
+Execute `STOP.bat`.
+
+## Atualizar pelo GitHub
+
+Execute `ATUALIZAR.bat`. O atualizador:
+
+- bloqueia a operação se houver alterações locais;
+- aceita somente atualização linear por fast-forward;
+- atualiza dependências apenas quando os manifests mudarem;
+- reinicia o Onion depois de instalar uma versão nova com sucesso.

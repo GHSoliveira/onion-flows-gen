@@ -5,7 +5,33 @@ import crypto from 'node:crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const uploadsRoot = path.resolve(__dirname, '../../uploads');
+const companionMode = ['1', 'true', 'yes', 'on'].includes(
+  String(process.env.COMPANION_MODE || '').trim().toLowerCase()
+);
+const localAppData = String(process.env.LOCALAPPDATA || '').trim();
+export const uploadsRoot = companionMode && localAppData
+  ? path.resolve(localAppData, 'Onion', 'runtime', 'media')
+  : path.resolve(__dirname, '../../uploads');
+const DEFAULT_TRANSIENT_MEDIA_TTL_MS = 15 * 60 * 1000;
+const TRANSIENT_MEDIA_TTL_MS = Math.max(
+  2 * 60 * 1000,
+  Number.parseInt(process.env.TRANSIENT_MEDIA_TTL_MS || `${DEFAULT_TRANSIENT_MEDIA_TTL_MS}`, 10)
+);
+const mediaDeletionTimers = new Map();
+
+export const scheduleTransientMediaDeletion = (filePath, ttlMs = TRANSIENT_MEDIA_TTL_MS) => {
+  const resolved = path.resolve(filePath);
+  const root = path.resolve(uploadsRoot);
+  if (!(resolved === root || resolved.startsWith(`${root}${path.sep}`))) return;
+  const previous = mediaDeletionTimers.get(resolved);
+  if (previous) clearTimeout(previous);
+  const timer = setTimeout(() => {
+    mediaDeletionTimers.delete(resolved);
+    fs.unlink(resolved).catch(() => {});
+  }, Math.max(1_000, Number(ttlMs) || TRANSIENT_MEDIA_TTL_MS));
+  timer.unref?.();
+  mediaDeletionTimers.set(resolved, timer);
+};
 
 const sanitizeFilename = (name) => String(name || 'arquivo')
   .replace(/[^\p{L}\p{N}._-]/gu, '_')
@@ -60,6 +86,7 @@ export const storeTenantMediaBuffer = async ({
 
   await fs.mkdir(tenantDir, { recursive: true });
   await fs.writeFile(filePath, buffer);
+  if (companionMode) scheduleTransientMediaDeletion(filePath);
 
   return {
     fileName,

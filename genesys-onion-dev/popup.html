@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="pt-BR">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Genesys Onion Dev</title><link rel="stylesheet" href="popup.css"></head>
+<body>
+  <header>
+    <span class="onion">◉</span>
+    <div><h1>Genesys Onion Dev</h1><p>Ambiente isolado de testes</p></div>
+    <button id="advanced-toggle" class="icon-button" type="button" title="Configurações técnicas" aria-label="Abrir configurações técnicas" aria-expanded="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 8.6A3.4 3.4 0 1 0 12 15.4 3.4 3.4 0 0 0 12 8.6Zm8.1 4.8v-2.8l-2-.6a7 7 0 0 0-.7-1.7l1-1.8-2-2-1.8 1a7 7 0 0 0-1.7-.7l-.6-2H9.5l-.6 2a7 7 0 0 0-1.7.7l-1.8-1-2 2 1 1.8A7 7 0 0 0 3.7 10l-2 .6v2.8l2 .6a7 7 0 0 0 .7 1.7l-1 1.8 2 2 1.8-1a7 7 0 0 0 1.7.7l.6 2h2.8l.6-2a7 7 0 0 0 1.7-.7l1.8 1 2-2-1-1.8a7 7 0 0 0 .7-1.7l2-.6Z"/>
+      </svg>
+    </button>
+    <span id="dot"></span>
+  </header>
+  <main>
+    <label class="switch"><input id="enabled" type="checkbox"><span>Espelhamento ativado</span></label>
+    <section id="advanced-settings" class="advanced-settings" hidden>
+      <div class="advanced-heading"><b>Configurações técnicas</b><small>Altere somente para diagnóstico.</small></div>
+      <label class="switch"><input id="observe-network" type="checkbox"><span>Observador passivo (desliga tudo)</span></label>
+      <label class="switch"><input id="passive-roster" type="checkbox"><span>Roster passivo de clientes</span></label>
+      <label class="switch"><input id="passive-deltas" type="checkbox"><span>Deltas passivos de mensagens</span></label>
+      <label class="switch"><input id="passive-discovery" type="checkbox"><span>Descoberta passiva de clientes</span></label>
+      <label class="switch"><input id="api-governor" type="checkbox"><span>Teto de segurança da API</span></label>
+    </section>
+    <label>Servidor local<input id="base-url" value="http://127.0.0.1:3101"></label>
+    <section id="login-area">
+      <label>Usuário<input id="username" autocomplete="username"></label>
+      <label>Senha<input id="password" type="password" autocomplete="current-password"></label>
+      <button id="login">Entrar no Onion</button>
+    </section>
+    <section id="session" hidden><p id="user"></p><button id="logout" class="secondary">Sair</button></section>
+    <details id="ixc-operator" open>
+      <summary>Colaborador IXC</summary>
+      <div class="operator-current"><b id="operator-name">Nao configurado</b><span id="operator-id">-</span></div>
+      <div class="operator-search"><input id="operator-search" placeholder="Buscar colaborador pelo nome"><button id="operator-search-btn">Buscar</button></div>
+      <small id="operator-search-status"></small>
+      <div id="operator-results"></div>
+    </details>
+    <div class="status"><b id="status">Carregando…</b><span id="focus">Nenhuma conversa validada</span><span id="network-observation">Observador aguardando</span></div>
+    <details open><summary>Diagnóstico</summary><div id="logs"></div></details>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

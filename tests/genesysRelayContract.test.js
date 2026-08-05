@@ -19,7 +19,8 @@ const loadAgentWorkspaceSource = () => readFile(
 
 test('relay Onion cria comando Genesys curto, único, vinculado à geração e espera confirmação real', async () => {
   const relay = await loadRelaySource();
-  assert.match(relay, /commandId:\s*generateId\('gcmd'\)/);
+  assert.match(relay, /commandId:\s*`gcmd_\$\{chat\.id\}_\$\{message\?\.id/);
+  assert.match(relay, /genesysCommandOutbox\.set\(commandId/);
   assert.match(relay, /expectedGeneration:\s*pickString\(chat\.genesysSyncGeneration\)/);
   assert.match(relay, /payload\.expiresAt\s*=\s*payload\.createdAt\s*\+\s*30000/);
   assert.match(relay, /reason:\s*'missing_sync_generation'/);
@@ -30,7 +31,7 @@ test('relay Onion cria comando Genesys curto, único, vinculado à geração e e
 test('relay de mídia Genesys envia somente metadados e mantém o vínculo do card', async () => {
   const relay = await loadRelaySource();
   assert.match(relay, /export const relayAgentMediaToGenesys/);
-  assert.match(relay, /commandId:\s*generateId\('gmedia'\)/);
+  assert.match(relay, /commandId:\s*`gmedia_\$\{chat\.id\}_\$\{message\?\.id/);
   assert.match(relay, /expectedGeneration:\s*pickString\(chat\.genesysSyncGeneration\)/);
   assert.match(relay, /contentLengthBytes/);
   assert.match(relay, /emitCmdToExtensionWithAck\(\s*targetAgentId,\s*'cmd:enviar_midia'/s);
