@@ -1349,8 +1349,15 @@ router.post('/:id/ixc-os', authenticate, authorize(CHAT_OPERATIONAL_ROLES), requ
     }
     const digits = (value, max = 32) => String(value || '').replace(/\D/g, '').slice(0, max);
     const selectedOsId = digits(req.body?.selectedOsId);
-    const knownOrder = chat.ixcData.osList.some((order) => String(order?.osId || '') === selectedOsId);
-    if (!selectedOsId || !knownOrder) return res.status(400).json({ error: 'Selecione uma OS válida deste cliente.' });
+    const normalizeOsLabel = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim().toUpperCase();
+    const knownOrder = chat.ixcData.osList.find((order) => String(order?.osId || '') === selectedOsId);
+    const validOpenSupportN1 = Boolean(knownOrder)
+      && !/(FINALIZ|ENCERR|FECHAD|CANCEL)/.test(normalizeOsLabel(knownOrder.status))
+      && normalizeOsLabel(knownOrder.subject).startsWith('SUPORTE INICIAL')
+      && normalizeOsLabel(knownOrder.sector).startsWith('SUPORTE N1');
+    if (!selectedOsId || !validOpenSupportN1) {
+      return res.status(400).json({ error: 'Selecione uma OS aberta de SUPORTE INICIAL / SUPORTE N1 deste cliente.' });
+    }
     const requestedAttachments = Array.isArray(req.body?.attachments) ? req.body.attachments.slice(0, 12) : [];
     const attachments = [];
     if (requestedAttachments.length) {
@@ -1398,6 +1405,7 @@ router.post('/:id/ixc-os', authenticate, authorize(CHAT_OPERATIONAL_ROLES), requ
     }
     const operation = {
       selectedOsId,
+      requestId: String(req.body?.requestId || '').trim().slice(0, 100),
       clientId: digits(chat.ixcData.clientId),
       cpf: digits(chat.ixcData.cpf || chat?.vars?.cpf),
       diagnosisId: digits(req.body?.diagnosisId),

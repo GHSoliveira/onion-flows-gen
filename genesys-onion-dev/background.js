@@ -1,12 +1,14 @@
 importScripts("external-status.js", "lib/socket.io.min.js");
 
-const EXTENSION_BUILD = "2026.08.05.1";
+const EXTENSION_BUILD = "2026.08.05.2";
 const SETTINGS_KEY = "onionDevSettings";
 const AUTH_KEY = "onionDevAuth";
 const COMMUNICATIONS_KEY = "onionDevCommunications";
 const SYNC_OUTBOX_KEY = "onionDevSyncOutbox";
 const CLOSE_OUTBOX_KEY = "onionDevCloseOutbox";
 const DELTA_OUTBOX_KEY = "onionDevDeltaOutbox";
+const IXC_OS_COMMAND_TTL_MS = 10 * 60 * 1000;
+const ixcOsCommandCache = new Map();
 const IXC_USER_CONFIG_KEY = "ixcUserConfig";
 const DEFAULTS = {
   enabled: false,
@@ -1789,7 +1791,13 @@ async function handleIxcOsCommand(next, payload = {}) {
   if (!finalizeOnly && (!sectorCode || !payload.visitDate)) throw new Error("setor_ou_agendamento_ausente");
 
   const before = await fetchIxcServiceOrders(clientId);
-  if (!before.some((order) => String(order.osId) === selectedOsId)) throw new Error("os_selecionada_nao_pertence_ao_cliente");
+  const selectedOrder = before.find((order) => String(order.osId) === selectedOsId);
+  const normalizeOrderLabel = (value) => String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim().toUpperCase();
+  const validOpenSupportN1 = Boolean(selectedOrder)
+    && !/(FINALIZ|ENCERR|FECHAD|CANCEL)/.test(normalizeOrderLabel(selectedOrder.status))
+    && normalizeOrderLabel(selectedOrder.subject).startsWith("SUPORTE INICIAL")
+    && normalizeOrderLabel(selectedOrder.sector).startsWith("SUPORTE N1");
+  if (!validOpenSupportN1) throw new Error("os_selecionada_nao_e_suporte_n1_aberta");
   const previousIds = new Set(before.map((order) => String(order.osId || "")).filter(Boolean));
   log("info", "Finalizando OS selecionada", `#${selectedOsId} · tarefa ${nextTaskCode}`);
   await finalizeSelectedIxcOs({ osId: selectedOsId, techId, diagnosisId, nextTaskCode, mensagem });
@@ -1814,7 +1822,7 @@ async function handleIxcOsCommand(next, payload = {}) {
     await scheduleIxcOs({ osId: created.os.osId, visitDate: payload.visitDate });
   }
   await handleIxcCommand(next, { convId, cpf });
-  next.emit("cmd:resultado", {
+  const result = {
     cmd: "ixc_os", ok: true, convId,
     chatId: payload.chatId || null,
     requestId: payload.requestId || null,
@@ -1823,8 +1831,10 @@ async function handleIxcOsCommand(next, payload = {}) {
     attachments: attachmentResults,
     attachedCount: attachmentResults.filter((item) => item.ok).length,
     attachmentFailedCount: attachmentResults.filter((item) => !item.ok).length
-  });
+  };
+  next.emit("cmd:resultado", result);
   log("ok", finalizeOnly ? "Pré-OS gerada" : "OS encaminhada e agendada", `#${created.os.osId}`);
+  return result;
 }
 
 function gadgetFrameKey(tabId, frameId) {
@@ -4840,15 +4850,34 @@ async function ensureSocket() {
       });
     });
     next.on("cmd:ixc_os", (payload = {}) => {
-      handleIxcOsCommand(next, payload).catch((error) => {
+      const requestId = String(payload.requestId || "").trim();
+      const now = Date.now();
+      for (const [cachedRequestId, cached] of ixcOsCommandCache) {
+        if (now - cached.at > IXC_OS_COMMAND_TTL_MS) ixcOsCommandCache.delete(cachedRequestId);
+      }
+      const cached = requestId ? ixcOsCommandCache.get(requestId) : null;
+      if (cached?.status === "running") {
+        log("warn", "Comando de OS duplicado ignorado", requestId);
+        return;
+      }
+      if (cached?.result) {
+        next.emit("cmd:resultado", cached.result);
+        return;
+      }
+      if (requestId) ixcOsCommandCache.set(requestId, { status: "running", at: now });
+      handleIxcOsCommand(next, payload).then((result) => {
+        if (requestId) ixcOsCommandCache.set(requestId, { status: "done", at: Date.now(), result });
+      }).catch((error) => {
         log("error", "Falha no fluxo de OS", error?.message || "falha_inesperada");
-        next.emit("cmd:resultado", {
+        const result = {
           cmd: "ixc_os", ok: false,
           convId: payload.convId || null,
           chatId: payload.chatId || null,
           requestId: payload.requestId || null,
           error: error?.message || "falha_inesperada"
-        });
+        };
+        if (requestId) ixcOsCommandCache.set(requestId, { status: "done", at: Date.now(), result });
+        next.emit("cmd:resultado", result);
       });
     });
     next.on("cmd:buscar_filas_transferencia", async (payload = {}, ack) => {

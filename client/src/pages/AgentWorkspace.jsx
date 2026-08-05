@@ -179,6 +179,26 @@ const activeIxcLogins = (details) => (
     : []
 );
 const PRE_OS_TASK_CODES = new Set(['4631', '4633', '4635', '4637', '4641']);
+const normalizeIxcOsLabel = (value) => String(value || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .replace(/\s+/g, ' ')
+  .trim()
+  .toUpperCase();
+const isValidOpenSupportN1Order = (order) => {
+  if (!order?.osId) return false;
+  const status = normalizeIxcOsLabel(order.status);
+  const subject = normalizeIxcOsLabel(order.subject);
+  const sector = normalizeIxcOsLabel(order.sector);
+  return !/(FINALIZ|ENCERR|FECHAD|CANCEL)/.test(status)
+    && subject.startsWith('SUPORTE INICIAL')
+    && sector.startsWith('SUPORTE N1');
+};
+const validOpenSupportN1Orders = (details) => (
+  (Array.isArray(details?.osList) ? details.osList : [])
+    .filter(isValidOpenSupportN1Order)
+    .sort((left, right) => Number(right?.osId || 0) - Number(left?.osId || 0))
+);
 const IXC_OS_TASKS = [
   ['4533', 'BC - OUTROS'],
   ['4629', 'REPARO - CÂMERA'],
@@ -603,6 +623,7 @@ const AgentWorkspace = () => {
     nextTaskCode: '', nextTaskQuery: '', sectorCode: '', visitDate: defaultIxcVisitDate(),
     visitPeriod: 'MANHA', periodNote: '', description: '', reference: '',
     address: '', phone: '', selectedMedia: {}, submitting: false,
+    chatId: '', convId: '', clientId: '', requestId: '',
   });
   const [routerProbe, setRouterProbe] = useState({ chatId: '', ip: '', status: 'idle', url: '', openPorts: [], pickerOpen: false });
   const [wrapupPanel, setWrapupPanel] = useState({
@@ -3666,7 +3687,25 @@ const AgentWorkspace = () => {
       phone: order?.phone || details?.phone || '',
       selectedMedia: {},
       submitting: false,
+      chatId: String(selectedChat?.id || ''),
+      convId: String(selectedChat?.genesysConvId || selectedChat?.externalConvId || ''),
+      clientId: String(details?.clientId || ''),
+      requestId: globalThis.crypto?.randomUUID?.() || `ixc_os_${Date.now()}_${Math.random().toString(16).slice(2)}`,
     }));
+  };
+
+  const openQuickIxcOsOperation = () => {
+    const details = selectedChat?.ixcData || chatVars?.ixc_dados;
+    if (!details?.clientId) {
+      toast.error('Busque os dados do IXC antes de finalizar uma OS');
+      return;
+    }
+    const candidates = validOpenSupportN1Orders(details);
+    if (!candidates.length) {
+      toast.error('Nenhuma OS aberta de SUPORTE INICIAL / SUPORTE N1 foi encontrada');
+      return;
+    }
+    openIxcOsOperation(candidates[0]);
   };
 
   const setIxcVisitPeriod = (visitPeriod) => {
@@ -3683,6 +3722,20 @@ const AgentWorkspace = () => {
     const operation = ixcOsOperation;
     const finalizeOnly = PRE_OS_TASK_CODES.has(operation.nextTaskCode);
     if (!selectedChat?.id || !operation.order?.osId) return;
+    const currentConvId = String(selectedChat?.genesysConvId || selectedChat?.externalConvId || '');
+    if (
+      String(selectedChat.id) !== String(operation.chatId)
+      || currentConvId !== String(operation.convId)
+      || String(details?.clientId || '') !== String(operation.clientId)
+    ) {
+      toast.error('O cliente mudou desde a abertura da janela. Reabra o fluxo de OS.');
+      setIxcOsOperation((previous) => ({ ...previous, open: false, submitting: false }));
+      return;
+    }
+    if (!isValidOpenSupportN1Order(operation.order)) {
+      toast.error('A OS selecionada não é uma SUPORTE INICIAL / SUPORTE N1 aberta');
+      return;
+    }
     if (!details?.ixcOperator?.configured) {
       toast.error('Colaborador do IXC não configurado. Abra o popup da extensão e identifique seu usuário.');
       return;
@@ -3722,6 +3775,7 @@ const AgentWorkspace = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           selectedOsId: operation.order.osId,
+          requestId: operation.requestId,
           diagnosisId: operation.diagnosisId,
           nextTaskCode: operation.nextTaskCode,
           sectorCode: operation.sectorCode,
@@ -3741,6 +3795,92 @@ const AgentWorkspace = () => {
       toast.error(error?.message || 'Falha ao iniciar o fluxo de OS');
       setIxcOsOperation((previous) => ({ ...previous, submitting: false }));
     }
+  };
+
+  const renderQuickIxcOsModal = () => {
+    if (!ixcOsOperation.open || ixcDetailsModal.open) return null;
+    const details = selectedChat?.ixcData || chatVars?.ixc_dados || {};
+    const candidates = validOpenSupportN1Orders(details);
+    const finalizeOnly = PRE_OS_TASK_CODES.has(ixcOsOperation.nextTaskCode);
+    const ready = Boolean(
+      ixcOsOperation.diagnosisId
+      && ixcOsOperation.nextTaskCode
+      && ixcOsOperation.description.trim().length >= 10
+      && (finalizeOnly || (ixcOsOperation.sectorCode.trim() && ixcOsOperation.visitDate))
+      && isValidOpenSupportN1Order(ixcOsOperation.order)
+    );
+    const changeOrder = (osId) => {
+      const order = candidates.find((candidate) => String(candidate.osId) === String(osId));
+      if (!order) return;
+      const fallbackAddress = [details.street, details.houseNumber, details.neighborhood, details.city, details.state].filter(Boolean).join(', ');
+      setIxcOsOperation((previous) => ({
+        ...previous,
+        order,
+        address: order.address || fallbackAddress,
+        reference: order.reference || '',
+        phone: order.phone || details.phone || previous.phone,
+      }));
+    };
+    const close = () => {
+      if (!ixcOsOperation.submitting) setIxcOsOperation((previous) => ({ ...previous, open: false }));
+    };
+
+    return (
+      <div className="ui-overlay-fade fixed inset-0 z-[120] flex items-end justify-center bg-slate-950/60 p-3 backdrop-blur-sm sm:items-center" onClick={close}>
+        <div className="ui-modal-surface flex max-h-[94vh] w-full max-w-2xl flex-col overflow-hidden rounded-[26px] bg-white shadow-2xl dark:bg-slate-900" onClick={(event) => event.stopPropagation()}>
+          <header className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-100 px-5 py-4 dark:border-slate-800">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.16em] text-blue-600 dark:text-blue-300"><ClipboardList size={14} />Operação IXC</div>
+              <h3 className="mt-1 truncate text-lg font-bold text-slate-950 dark:text-white">Finalizar OS de {details.fullName || selectedChatName}</h3>
+              <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">Somente OS aberta de Suporte Inicial no setor Suporte N1.</p>
+            </div>
+            <button type="button" disabled={ixcOsOperation.submitting} onClick={close} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-500 transition-colors hover:bg-slate-200 disabled:opacity-40 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"><XIcon size={16} /></button>
+          </header>
+
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 custom-scrollbar">
+            <div className="grid gap-4 sm:grid-cols-[1.1fr_0.9fr]">
+              <label className="block text-[9px] font-bold uppercase tracking-wide text-slate-500">
+                Ordem de serviço
+                <select value={String(ixcOsOperation.order?.osId || '')} onChange={(event) => changeOrder(event.target.value)} className="mt-1 w-full rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-xs font-bold text-blue-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 dark:border-blue-900/60 dark:bg-blue-950/25 dark:text-blue-100 dark:focus:ring-blue-950">
+                  {candidates.map((order) => <option key={order.osId} value={order.osId}>OS #{order.osId} · {order.subject}</option>)}
+                </select>
+              </label>
+              <div className="rounded-xl bg-slate-50 px-3 py-2.5 text-[10px] leading-4 text-slate-500 dark:bg-slate-800/70 dark:text-slate-300">
+                <div className="font-bold text-slate-800 dark:text-slate-100">{ixcOsOperation.order?.sector || 'Suporte N1'}</div>
+                <div>{ixcOsOperation.order?.status || 'Aberta'}{ixcOsOperation.order?.openedAt ? ` · ${ixcOsOperation.order.openedAt}` : ''}</div>
+              </div>
+            </div>
+
+            {!details.ixcOperator?.configured ? <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-[11px] text-red-700 dark:border-red-900/50 dark:bg-red-950/25 dark:text-red-200"><b>Colaborador IXC não identificado.</b> Abra o IXC ou configure o usuário no popup da extensão.</div> : <div className="mt-4 flex items-center justify-between border-y border-slate-100 py-2 text-[10px] text-slate-500 dark:border-slate-800 dark:text-slate-400"><span>Colaborador <b className="text-slate-800 dark:text-slate-200">{details.ixcOperator.techName || 'Identificado'}</b></span><span className="font-mono font-bold">#{details.ixcOperator.techId}</span></div>}
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <IxcCatalogSearch label="Diagnóstico" placeholder="Código ou diagnóstico..." options={IXC_OS_DIAGNOSES} query={ixcOsOperation.diagnosisQuery} selectedCode={ixcOsOperation.diagnosisId} onChange={(value) => setIxcOsOperation((previous) => ({ ...previous, diagnosisQuery: value, diagnosisId: '' }))} onSelect={(code, display) => setIxcOsOperation((previous) => ({ ...previous, diagnosisId: code, diagnosisQuery: display }))} />
+              <IxcCatalogSearch label="Próxima tarefa" placeholder="Código ou tarefa..." options={IXC_OS_TASKS} query={ixcOsOperation.nextTaskQuery} selectedCode={ixcOsOperation.nextTaskCode} onChange={(value) => setIxcOsOperation((previous) => ({ ...previous, nextTaskQuery: value, nextTaskCode: '' }))} onSelect={(code, display) => setIxcOsOperation((previous) => ({ ...previous, nextTaskCode: code, nextTaskQuery: display }))} />
+              {!finalizeOnly ? <label className="text-[9px] font-bold uppercase tracking-wide text-slate-500">Código do setor técnico<input value={ixcOsOperation.sectorCode} onChange={(event) => setIxcOsOperation((previous) => ({ ...previous, sectorCode: event.target.value.replace(/\D/g, '') }))} inputMode="numeric" placeholder="Ex: 63" className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-800 outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></label> : null}
+              {!finalizeOnly ? <label className="text-[9px] font-bold uppercase tracking-wide text-slate-500">Data da visita<input type="datetime-local" value={ixcOsOperation.visitDate} onChange={(event) => setIxcOsOperation((previous) => ({ ...previous, visitDate: event.target.value }))} className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-800 outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></label> : null}
+              <div className="text-[9px] font-bold uppercase tracking-wide text-slate-500">Período<div className="mt-1 flex min-h-10 items-center gap-4 rounded-xl border border-slate-200 px-3 dark:border-slate-700"><label className="flex items-center gap-1.5 text-xs font-semibold normal-case text-slate-700 dark:text-slate-200"><input type="radio" checked={ixcOsOperation.visitPeriod === 'MANHA'} onChange={() => setIxcVisitPeriod('MANHA')} />Manhã</label><label className="flex items-center gap-1.5 text-xs font-semibold normal-case text-slate-700 dark:text-slate-200"><input type="radio" checked={ixcOsOperation.visitPeriod === 'TARDE'} onChange={() => setIxcVisitPeriod('TARDE')} />Tarde</label></div></div>
+              <label className="text-[9px] font-bold uppercase tracking-wide text-slate-500">Observação de horário<input value={ixcOsOperation.periodNote} onChange={(event) => setIxcOsOperation((previous) => ({ ...previous, periodNote: event.target.value }))} placeholder="Ex: após as 09h" className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-800 outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></label>
+              <label className="text-[9px] font-bold uppercase tracking-wide text-slate-500 sm:col-span-2">Descrição do problema<textarea rows={3} maxLength={2000} value={ixcOsOperation.description} onChange={(event) => setIxcOsOperation((previous) => ({ ...previous, description: event.target.value }))} placeholder="Descreva o problema com pelo menos 10 caracteres" className="mt-1 w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs leading-5 text-slate-800 outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></label>
+            </div>
+
+            <details className="mt-4 border-t border-slate-100 pt-3 dark:border-slate-800">
+              <summary className="cursor-pointer text-[10px] font-bold uppercase tracking-wide text-slate-500">Contato, endereço e anexos</summary>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <label className="text-[9px] font-bold uppercase text-slate-500 sm:col-span-2">Endereço<input value={ixcOsOperation.address} onChange={(event) => setIxcOsOperation((previous) => ({ ...previous, address: event.target.value }))} className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></label>
+                <label className="text-[9px] font-bold uppercase text-slate-500">Telefone<input value={ixcOsOperation.phone} onChange={(event) => setIxcOsOperation((previous) => ({ ...previous, phone: event.target.value }))} className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></label>
+                <label className="text-[9px] font-bold uppercase text-slate-500">Referência<input value={ixcOsOperation.reference} onChange={(event) => setIxcOsOperation((previous) => ({ ...previous, reference: event.target.value }))} className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></label>
+              </div>
+              {chatMediaItems.some((media) => media.messageId) ? <div className="mt-3 grid gap-2 sm:grid-cols-2">{chatMediaItems.filter((media) => media.messageId).map((media) => { const selected = ixcOsOperation.selectedMedia?.[media.messageId]; return <label key={media.messageId} className={`flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-[10px] ${selected ? 'border-blue-300 bg-blue-50 text-blue-800 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-200' : 'border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300'}`}><input type="checkbox" checked={Boolean(selected)} onChange={(event) => setIxcOsOperation((previous) => { const next = { ...(previous.selectedMedia || {}) }; if (event.target.checked) next[media.messageId] = { messageId: media.messageId, fileName: media.fileName || 'Anexo', description: media.fileName || '' }; else delete next[media.messageId]; return { ...previous, selectedMedia: next }; })} /><span className="truncate">{media.fileName || media.type || 'Anexo'}</span></label>; })}</div> : <p className="mt-2 text-[10px] text-slate-400">Nenhum anexo disponível nesta conversa.</p>}
+            </details>
+          </div>
+
+          <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-slate-100 bg-slate-50/80 px-5 py-3 dark:border-slate-800 dark:bg-slate-950/40">
+            <div className="hidden text-[10px] leading-4 text-slate-400 sm:block">A extensão revalida cliente, status, assunto e setor antes de alterar o IXC.</div>
+            <div className="ml-auto flex gap-2"><button type="button" disabled={ixcOsOperation.submitting} onClick={close} className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">Cancelar</button><button type="button" disabled={ixcOsOperation.submitting || !ready || !details.ixcOperator?.configured} onClick={submitIxcOsOperation} className="inline-flex min-w-40 items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-45">{ixcOsOperation.submitting ? <Loader2 size={14} className="animate-spin" /> : <ClipboardList size={14} />}{ixcOsOperation.submitting ? 'Enviando...' : finalizeOnly ? 'Finalizar OS' : 'Finalizar e encaminhar'}</button></div>
+          </footer>
+        </div>
+      </div>
+    );
   };
 
   const renderIxcDetailsModal = () => {
@@ -3872,8 +4012,8 @@ const AgentWorkspace = () => {
                         {order.city ? <span><b>Cidade:</b> {order.city}</span> : null}
                       </div>
                       {order.diagnosis ? <div className="mt-2 border-l-2 border-amber-400 bg-amber-50/70 px-2 py-1.5 text-[10px] text-amber-800 dark:bg-amber-950/25 dark:text-amber-200"><b>Diagnóstico:</b> {order.diagnosis}</div> : null}
-                      <button type="button" onClick={() => openIxcOsOperation(order)} className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-[10px] font-bold text-blue-700 transition hover:bg-blue-100 dark:border-blue-900/50 dark:bg-blue-950/30 dark:text-blue-300"><ClipboardList size={12} />Usar esta OS</button>
-                      {ixcOsOperation.open && String(ixcOsOperation.order?.osId) === String(order.osId) ? (
+                      {isValidOpenSupportN1Order(order) ? <button type="button" onClick={() => openIxcOsOperation(order)} className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-[10px] font-bold text-blue-700 transition hover:bg-blue-100 dark:border-blue-900/50 dark:bg-blue-950/30 dark:text-blue-300"><ClipboardList size={12} />Usar esta OS</button> : null}
+                      {ixcDetailsModal.open && ixcOsOperation.open && String(ixcOsOperation.order?.osId) === String(order.osId) ? (
                         <div className="mt-3 overflow-hidden rounded-lg border border-blue-200 bg-blue-50/35 dark:border-blue-900/50 dark:bg-blue-950/15">
                           <div className="flex items-start justify-between gap-3 border-b border-blue-100 px-3 py-2.5 dark:border-blue-900/40">
                             <div><div className="text-xs font-bold text-slate-900 dark:text-white">Preparar encaminhamento da OS #{order.osId}</div><div className="mt-0.5 text-[9px] text-slate-500">Confira os dados capturados antes de continuar.</div></div>
@@ -4142,6 +4282,7 @@ const AgentWorkspace = () => {
     )
     : null;
   const selectedHeaderIxc = selectedChat?.ixcData || chatVars?.ixc_dados || null;
+  const selectedValidIxcOrders = validOpenSupportN1Orders(selectedHeaderIxc);
   const selectedHeaderExternalNetwork = chatVars?.external_network && typeof chatVars.external_network === 'object'
     ? chatVars.external_network
     : null;
@@ -4728,6 +4869,22 @@ const AgentWorkspace = () => {
                       {isGenesysChatClient(selectedChat) ? (
                         <button
                           type="button"
+                          onClick={openQuickIxcOsOperation}
+                          disabled={!selectedHeaderIxc?.clientId || selectedValidIxcOrders.length === 0}
+                          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-2.5 text-[9px] font-bold text-blue-700 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400 disabled:opacity-60 dark:border-blue-900/50 dark:bg-blue-950/30 dark:text-blue-300 dark:hover:bg-blue-950/50 dark:disabled:border-slate-700 dark:disabled:bg-slate-800 dark:disabled:text-slate-500"
+                          title={!selectedHeaderIxc?.clientId
+                            ? 'Busque os dados do IXC antes de finalizar uma OS'
+                            : selectedValidIxcOrders.length
+                              ? `${selectedValidIxcOrders.length} OS aberta de SUPORTE N1 disponível`
+                              : 'Nenhuma OS aberta de SUPORTE INICIAL / SUPORTE N1'}
+                        >
+                          <ClipboardList size={13} />
+                          <span className="hidden sm:inline">Finalizar OS</span>
+                        </button>
+                      ) : null}
+                      {isGenesysChatClient(selectedChat) ? (
+                        <button
+                          type="button"
                           onClick={handleReloadGenesysConversation}
                           disabled={conversationReloading}
                           className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-blue-600 transition-colors hover:bg-blue-100 disabled:cursor-wait disabled:opacity-60 dark:border-blue-900/50 dark:bg-blue-900/20 dark:text-blue-300"
@@ -4978,6 +5135,7 @@ const AgentWorkspace = () => {
         ) : (
           <div className="flex h-full flex-col items-center justify-center px-4 text-center text-slate-400 dark:text-slate-500"><Headset size={40} className="mb-3 opacity-20" /><h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300">Area de atendimento</h3><p className="mt-1.5 max-w-sm text-xs">Selecione um cliente para abrir a conversa.</p></div>
         )}
+        {renderQuickIxcOsModal()}
         {isMobileView && isAiPanelOpen && selectedChat && isGenesysChatClient(selectedChat) ? <div className="ui-overlay-fade fixed inset-0 z-50 bg-slate-950/55 lg:hidden" onClick={() => setIsAiPanelOpen(false)}><div className="ui-sheet-surface absolute inset-x-0 bottom-0 flex max-h-[88vh] min-h-[58vh] flex-col rounded-t-[28px] bg-white p-4 shadow-2xl dark:bg-slate-900" onClick={(event) => event.stopPropagation()}><div className="mx-auto mb-3 h-1.5 w-14 shrink-0 rounded-full bg-slate-200 dark:bg-slate-700" /><div className="min-h-0 flex-1">{renderAiPanel()}</div></div></div> : null}
         {isMobileView && mobilePanelOpen && selectedChat ? <div className="ui-overlay-fade fixed inset-0 z-40 bg-slate-950/50 lg:hidden" onClick={() => setMobilePanelOpen(false)}><div className="ui-sheet-surface absolute inset-x-0 bottom-0 max-h-[78vh] rounded-t-[28px] bg-white p-4 shadow-2xl dark:bg-slate-900" onClick={(e) => e.stopPropagation()}><div className="mx-auto mb-4 h-1.5 w-14 rounded-full bg-slate-200 dark:bg-slate-700" /><div className="flex items-center justify-between gap-3"><div><div className="text-sm font-semibold text-slate-900 dark:text-white">{mobilePanelTab === 'info' ? 'Info do cliente' : 'Mensagens rapidas'}</div><div className="text-xs text-slate-500 dark:text-slate-400">{selectedChatName}</div></div><button type="button" onClick={() => setMobilePanelOpen(false)} className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-200"><XCircle size={18} /></button></div><div className="mt-4 grid grid-cols-2 gap-2 rounded-2xl bg-slate-100 p-1 dark:bg-slate-800"><button type="button" onClick={() => setMobilePanelTab('info')} className={`rounded-2xl px-3 py-2 text-sm font-semibold transition-colors ${mobilePanelTab === 'info' ? 'bg-white text-blue-600 shadow-sm dark:bg-slate-700 dark:text-blue-300' : 'text-slate-500 dark:text-slate-300'}`}>Info</button><button type="button" onClick={() => setMobilePanelTab('quick')} className={`rounded-2xl px-3 py-2 text-sm font-semibold transition-colors ${mobilePanelTab === 'quick' ? 'bg-white text-blue-600 shadow-sm dark:bg-slate-700 dark:text-blue-300' : 'text-slate-500 dark:text-slate-300'}`}>Rapidas</button></div><div className="mt-4 max-h-[56vh] overflow-y-auto custom-scrollbar pr-1">{mobilePanelTab === 'info' ? renderInfoPanel() : renderQuickRepliesPanel()}</div></div></div> : null}
         {transferModal.open && !transferModal.genesys ? <div className="ui-overlay-fade fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-4 backdrop-blur-sm lg:items-center" onClick={closeTransferModal}><div className="ui-responsive-modal w-full max-w-xl rounded-[28px] bg-white p-5 shadow-2xl dark:bg-slate-900" onClick={(e) => e.stopPropagation()}><div className="flex items-start justify-between gap-4"><div><h3 className="text-lg font-bold text-slate-900 dark:text-white">Transferir atendimento</h3><p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Encaminhe {selectedChatName} para uma fila ou diretamente para outro agente.</p></div><button type="button" onClick={closeTransferModal} disabled={transferModal.submitting} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-slate-100 text-slate-600 disabled:opacity-50 dark:bg-slate-800 dark:text-slate-200"><XCircle size={18} /></button></div>{transferModal.loading ? <div className="mt-5 flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-5 text-sm font-semibold text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"><Loader2 size={18} className="animate-spin text-blue-500" />Carregando destinos...</div> : <div className="mt-5 space-y-4"><div className="grid grid-cols-2 gap-2 rounded-2xl bg-slate-100 p-1 dark:bg-slate-800"><button type="button" onClick={() => setTransferModal((prev) => ({ ...prev, mode: 'queue' }))} className={`rounded-2xl px-3 py-2 text-sm font-semibold transition-colors ${transferModal.mode === 'queue' ? 'bg-white text-blue-600 shadow-sm dark:bg-slate-700 dark:text-blue-300' : 'text-slate-500 dark:text-slate-300'}`}>Fila</button><button type="button" onClick={() => setTransferModal((prev) => ({ ...prev, mode: 'agent' }))} className={`rounded-2xl px-3 py-2 text-sm font-semibold transition-colors ${transferModal.mode === 'agent' ? 'bg-white text-blue-600 shadow-sm dark:bg-slate-700 dark:text-blue-300' : 'text-slate-500 dark:text-slate-300'}`}>Agente</button></div>{transferModal.mode === 'queue' ? <div><label className="mb-2 block text-sm font-semibold text-slate-800 dark:text-slate-100">Fila de destino</label><select value={transferModal.queue} onChange={(e) => setTransferModal((prev) => ({ ...prev, queue: e.target.value }))} className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white">{transferModal.queues.length === 0 ? <option value="">Nenhuma fila disponivel</option> : transferModal.queues.map((queue) => <option key={queue.id || queue.name} value={queue.name}>{queue.name}</option>)}</select></div> : <div><label className="mb-2 block text-sm font-semibold text-slate-800 dark:text-slate-100">Agente de destino</label><select value={transferModal.agentId} onChange={(e) => setTransferModal((prev) => ({ ...prev, agentId: e.target.value }))} className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white">{transferModal.agents.length === 0 ? <option value="">Nenhum agente disponivel</option> : transferModal.agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name || agent.username}{agent.queues?.length ? ` - ${agent.queues.join(', ')}` : ''}</option>)}</select></div>}<div><label className="mb-2 block text-sm font-semibold text-slate-800 dark:text-slate-100">Motivo opcional</label><textarea rows={3} value={transferModal.reason} onChange={(e) => setTransferModal((prev) => ({ ...prev, reason: e.target.value }))} placeholder="Ex: encaminhando para especialista..." className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></div><div className="flex flex-col gap-3 sm:flex-row"><button type="button" onClick={closeTransferModal} disabled={transferModal.submitting} className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Cancelar</button><button type="button" onClick={handleTransferChat} disabled={transferModal.submitting || (transferModal.mode === 'queue' ? !transferModal.queue : !transferModal.agentId)} className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">{transferModal.submitting ? <Loader2 size={16} className="animate-spin" /> : <ArrowRightLeft size={16} />}{transferModal.submitting ? 'Transferindo...' : 'Transferir'}</button></div></div>}</div></div> : null}

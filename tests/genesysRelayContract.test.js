@@ -92,3 +92,23 @@ test('snapshot Genesys preserva bot, agente atual e agente anterior', async () =
   assert.match(relay, /'meta\.senderName'/);
   assert.match(relay, /Um snapshot autoritativo também corrige a autoria/);
 });
+
+test('fluxo rapido de OS aceita somente Suporte Inicial aberta no Suporte N1', async () => {
+  const workspace = await loadAgentWorkspaceSource();
+  const routes = await readFile(new URL('../src/routes/chats.js', import.meta.url), 'utf8');
+  const extension = await readFile(new URL('../genesys-onion-dev/background.js', import.meta.url), 'utf8');
+
+  assert.match(workspace, /const isValidOpenSupportN1Order/);
+  assert.match(workspace, /Finalizar OS/);
+  assert.match(workspace, /requestId: operation\.requestId/);
+  for (const source of [workspace, routes, extension]) {
+    assert.match(source, /startsWith\(['"]SUPORTE INICIAL['"]\)/);
+    assert.match(source, /startsWith\(['"]SUPORTE N1['"]\)/);
+    assert.match(source, /FINALIZ\|ENCERR\|FECHAD\|CANCEL/);
+  }
+  assert.match(routes, /requestId: String\(req\.body\?\.requestId/);
+  assert.match(extension, /os_selecionada_nao_e_suporte_n1_aberta/);
+  assert.match(extension, /IXC_OS_COMMAND_TTL_MS/);
+  assert.match(extension, /Comando de OS duplicado ignorado/);
+  assert.match(extension, /ixcOsCommandCache\.set\(requestId/);
+});
