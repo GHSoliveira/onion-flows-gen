@@ -213,7 +213,12 @@ app.use(helmet({
       imgSrc: ["'self'", "data:", "https:"],
       connectSrc: [
         "'self'",
-        ...(NODE_ENV === 'development' ? ["http://localhost:3001", "ws://localhost:3001"] : []),
+        ...(NODE_ENV === 'development' ? [
+          "http://localhost:3101",
+          "ws://localhost:3101",
+          "http://127.0.0.1:3101",
+          "ws://127.0.0.1:3101",
+        ] : []),
         ...(CLIENT_URL ? [CLIENT_URL, CLIENT_URL.replace('https://', 'wss://')] : []),
       ],
     },

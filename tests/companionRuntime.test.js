@@ -52,8 +52,10 @@ test('frontend local usa a origem atual e nao volta para a porta legada 3001', a
   const mainSource = await fs.readFile(path.join(root, 'client', 'src', 'main.jsx'), 'utf8');
   const viteSource = await fs.readFile(path.join(root, 'client', 'vite.config.js'), 'utf8');
 
-  assert.match(apiSource, /isLocalHost \? window\.location\.origin/);
-  assert.match(mainSource, /isLocalHost \? window\.location\.origin/);
+  assert.match(apiSource, /API_BASE = isLocalHost\s*\? window\.location\.origin/);
+  assert.match(mainSource, /API_BASE = isLocalHost\s*\? window\.location\.origin/);
+  assert.doesNotMatch(apiSource, /VITE_API_URL \|\| DEFAULT_API_BASE/);
+  assert.doesNotMatch(mainSource, /VITE_API_URL \|\| DEFAULT_API_BASE/);
   assert.doesNotMatch(`${apiSource}\n${mainSource}\n${viteSource}`, /localhost:3001/);
   assert.match(viteSource, /target: 'http:\/\/localhost:3101'/);
 });

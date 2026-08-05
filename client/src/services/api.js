@@ -1,8 +1,12 @@
 
 // Sempre incluir /api na URL base
 const isLocalHost = typeof window !== 'undefined' && ['localhost', '127.0.0.1'].includes(window.location.hostname);
-const DEFAULT_API_BASE = isLocalHost ? window.location.origin : 'https://flows-api.onionws.com';
-export const API_BASE = import.meta.env.VITE_API_URL || DEFAULT_API_BASE;
+const REMOTE_API_BASE = 'https://flows-api.onionws.com';
+// No runtime local, API e socket precisam permanecer same-origin. Isso evita que
+// localhost e 127.0.0.1 sejam tratados como origens diferentes pelo CSP.
+export const API_BASE = isLocalHost
+    ? window.location.origin
+    : (import.meta.env.VITE_API_URL || REMOTE_API_BASE);
 const BASE_URL = `${API_BASE}/api`;
 
 const getTenantId = () => {

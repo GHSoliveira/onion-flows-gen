@@ -9,8 +9,10 @@ import './index.css'
 import { onCLS, onFCP, onINP, onLCP, onTTFB } from 'web-vitals'
 
 const isLocalHost = typeof window !== 'undefined' && ['localhost', '127.0.0.1'].includes(window.location.hostname)
-const DEFAULT_API_BASE = isLocalHost ? window.location.origin : 'https://flows-api.onionws.com'
-const API_BASE = import.meta.env.VITE_API_URL || DEFAULT_API_BASE
+const REMOTE_API_BASE = 'https://flows-api.onionws.com'
+const API_BASE = isLocalHost
+  ? window.location.origin
+  : (import.meta.env.VITE_API_URL || REMOTE_API_BASE)
 
 const reportWebVital = (metric) => {
   try {
