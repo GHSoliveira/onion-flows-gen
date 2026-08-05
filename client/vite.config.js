@@ -23,7 +23,7 @@ export default defineConfig({
     allowedHosts: true,
     proxy: {
       '/api': {
-        target: 'http://localhost:3001',
+        target: 'http://localhost:3101',
         changeOrigin: true,
         secure: false,
         configure: (proxy, _options) => {
@@ -39,7 +39,7 @@ export default defineConfig({
         }
       },
       '/socket.io': {
-        target: 'http://localhost:3001',
+        target: 'http://localhost:3101',
         changeOrigin: true,
         ws: true,
         secure: false

@@ -46,6 +46,18 @@ test('ponte realtime encaminha ACKs do Genesys e usa união de salas', async () 
   assert.match(serverSource, /httpServer\.listen\(PORT, '127\.0\.0\.1'/);
 });
 
+test('frontend local usa a origem atual e nao volta para a porta legada 3001', async () => {
+  const root = path.resolve(import.meta.dirname, '..');
+  const apiSource = await fs.readFile(path.join(root, 'client', 'src', 'services', 'api.js'), 'utf8');
+  const mainSource = await fs.readFile(path.join(root, 'client', 'src', 'main.jsx'), 'utf8');
+  const viteSource = await fs.readFile(path.join(root, 'client', 'vite.config.js'), 'utf8');
+
+  assert.match(apiSource, /isLocalHost \? window\.location\.origin/);
+  assert.match(mainSource, /isLocalHost \? window\.location\.origin/);
+  assert.doesNotMatch(`${apiSource}\n${mainSource}\n${viteSource}`, /localhost:3001/);
+  assert.match(viteSource, /target: 'http:\/\/localhost:3101'/);
+});
+
 test('JSON local rejeita duplicatas concorrentes e mantém lookup indexado', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'onion-index-'));
   process.env.DB_ADAPTER = 'json';

@@ -1,7 +1,7 @@
 
 // Sempre incluir /api na URL base
 const isLocalHost = typeof window !== 'undefined' && ['localhost', '127.0.0.1'].includes(window.location.hostname);
-const DEFAULT_API_BASE = isLocalHost ? 'http://localhost:3001' : 'https://flows-api.onionws.com';
+const DEFAULT_API_BASE = isLocalHost ? window.location.origin : 'https://flows-api.onionws.com';
 export const API_BASE = import.meta.env.VITE_API_URL || DEFAULT_API_BASE;
 const BASE_URL = `${API_BASE}/api`;
 
