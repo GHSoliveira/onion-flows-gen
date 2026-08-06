@@ -128,3 +128,8 @@ test('companion bloqueia banco remoto e anexo usa streaming temporário local', 
   assert.match(mediaStorageSource, /LOCALAPPDATA/);
   assert.match(mediaStorageSource, /scheduleTransientMediaDeletion/);
 });
+
+test('mídia temporária local permanece disponível por oito horas', async () => {
+  const mediaStorageSource = await fs.readFile(new URL('../src/services/mediaStorage.js', import.meta.url), 'utf8');
+  assert.match(mediaStorageSource, /DEFAULT_TRANSIENT_MEDIA_TTL_MS = 8 \* 60 \* 60 \* 1000/);
+});

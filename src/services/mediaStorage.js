@@ -12,7 +12,7 @@ const localAppData = String(process.env.LOCALAPPDATA || '').trim();
 export const uploadsRoot = companionMode && localAppData
   ? path.resolve(localAppData, 'Onion', 'runtime', 'media')
   : path.resolve(__dirname, '../../uploads');
-const DEFAULT_TRANSIENT_MEDIA_TTL_MS = 15 * 60 * 1000;
+const DEFAULT_TRANSIENT_MEDIA_TTL_MS = 8 * 60 * 60 * 1000;
 const TRANSIENT_MEDIA_TTL_MS = Math.max(
   2 * 60 * 1000,
   Number.parseInt(process.env.TRANSIENT_MEDIA_TTL_MS || `${DEFAULT_TRANSIENT_MEDIA_TTL_MS}`, 10)
