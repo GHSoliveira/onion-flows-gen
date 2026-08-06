@@ -404,8 +404,7 @@ class JsonAdapter {
     this.flushChain = Promise.resolve();
     this.uniqueIndexDefinitions = {
       activeChats: [
-        ['id'],
-        ['tenantId', 'genesysConvId']
+        ['id']
       ],
       chatMessages: [
         ['tenantId', 'chatId', 'messageId'],

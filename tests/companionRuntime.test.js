@@ -89,7 +89,7 @@ test('agente pode ler somente as configuracoes do proprio tenant usadas no works
   assert.match(tenantRoutes, /router\.put\('\/:tenantId\/settings', authenticate, authorize\(\['ADMIN'\]\)/);
 });
 
-test('JSON local rejeita duplicatas concorrentes e mantém lookup indexado', async () => {
+test('JSON local permite conversationId reutilizado e mantém o id interno único', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'onion-index-'));
   process.env.DB_ADAPTER = 'json';
   process.env.USE_JSON_DB = 'true';
@@ -103,11 +103,16 @@ test('JSON local rejeita duplicatas concorrentes e mantém lookup indexado', asy
       adapter.insertOne('activeChats', { id: 'chat_a', tenantId: 'tenant_a', genesysConvId: 'conv_a' }),
       adapter.insertOne('activeChats', { id: 'chat_b', tenantId: 'tenant_a', genesysConvId: 'conv_a' })
     ]);
-    assert.equal(attempts.filter((item) => item.status === 'fulfilled').length, 1);
-    const rejected = attempts.find((item) => item.status === 'rejected');
+    assert.equal(attempts.filter((item) => item.status === 'fulfilled').length, 2);
+
+    const duplicateId = await Promise.allSettled([
+      adapter.insertOne('activeChats', { id: 'chat_a', tenantId: 'tenant_a', genesysConvId: 'conv_b' })
+    ]);
+    const rejected = duplicateId.find((item) => item.status === 'rejected');
     assert.equal(rejected?.reason?.code, 11000);
-    const found = await adapter.findOne('activeChats', { tenantId: 'tenant_a', genesysConvId: 'conv_a' });
-    assert.equal(found?.id, 'chat_a');
+
+    const sessions = await adapter.findMany('activeChats', { tenantId: 'tenant_a', genesysConvId: 'conv_a' });
+    assert.deepEqual(new Set(sessions.map((item) => item.id)), new Set(['chat_a', 'chat_b']));
     await adapter.close();
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
