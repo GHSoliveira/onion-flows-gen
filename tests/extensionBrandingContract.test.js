@@ -11,7 +11,7 @@ test('extensao usa identidade Onion Companion e assets oficiais', async () => {
 
   assert.equal(manifest.name, 'Onion Companion');
   assert.equal(manifest.action.default_title, 'Onion Companion');
-  assert.equal(manifest.version, '0.1.17');
+  assert.equal(manifest.version, '0.1.18');
   assert.equal(manifest.icons['128'], 'assets/onion-favicon.png');
   assert.match(popup, /assets\/onion-logo\.png/);
   assert.match(popup, /id="boot-loader"/);

@@ -125,7 +125,15 @@ test('conversationId encerrado que volta ativo inicia uma nova sessao local', as
 });
 
 test('evento de fechamento antigo nao remove card novo com conversationId reutilizado', async () => {
+  const relay = await loadRelaySource();
   const workspace = await loadAgentWorkspaceSource();
+  const extension = await readFile(new URL('../genesys-onion-dev/background.js', import.meta.url), 'utf8');
+  assert.match(relay, /closeGeneration && closeGeneration !== currentGeneration/);
+  assert.match(relay, /staleDuringLock/);
+  assert.match(relay, /genesys-conversation:\$\{tenantId\}:\$\{convId\}/);
+  assert.match(extension, /syncGeneration,\s*\n\s*closeEventId/);
+  assert.match(extension, /response\?\.stale === true/);
+  assert.match(extension, /cancelQueuedCloseForConversation\(conversationId, state\.syncGeneration\)/);
   assert.match(workspace, /closedId \? chat\.id === closedId : false/);
   assert.match(workspace, /!closedId\s+&&\s+closedConvId/);
 });

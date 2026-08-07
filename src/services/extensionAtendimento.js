@@ -8,7 +8,7 @@
 import adapter from '../../db/DatabaseAdapter.js';
 import { generateId } from '../utils/helpers.js';
 import { appendChatMessage, hydrateChatWithMessages, refreshChatMessageSummary } from './chatMessages.js';
-import { withChatLock } from './chatLocks.js';
+import { withChatLock, withLock } from './chatLocks.js';
 import { getIo } from './logs.js';
 import { storeTenantMediaBuffer } from './mediaStorage.js';
 
@@ -385,7 +385,7 @@ const ensureAgentContext = (socket) => {
   return { agentId, tenantId, agentName };
 };
 
-export const handleExtUpsert = async (socket, payload = {}) => {
+const handleExtUpsertUnlocked = async (socket, payload = {}) => {
   const { agentId, tenantId, agentName } = ensureAgentContext(socket);
   const convId = pickString(payload.convId, payload.conversationId, payload.id);
   if (!convId) {
@@ -580,6 +580,15 @@ export const handleExtUpsert = async (socket, payload = {}) => {
     identityFrozen: !!chat.identityFrozen,
     genesysMirrorPhase: chat.genesysMirrorPhase || null,
   };
+};
+
+export const handleExtUpsert = async (socket, payload = {}) => {
+  const convId = pickString(payload.convId, payload.conversationId, payload.id, 'missing');
+  const tenantId = pickString(socket?.tenantId, 'missing');
+  return withLock(
+    `genesys-conversation:${tenantId}:${convId}`,
+    () => handleExtUpsertUnlocked(socket, payload)
+  );
 };
 
 export const handleExtBackfill = async (socket, payload = {}) => {
@@ -1013,9 +1022,10 @@ export const handleExtCliente = async (socket, payload = {}) => {
   };
 };
 
-export const handleExtEncerrar = async (socket, payload = {}) => {
+const handleExtEncerrarUnlocked = async (socket, payload = {}) => {
   const { agentId, tenantId } = ensureAgentContext(socket);
   const convId = pickString(payload.convId, payload.conversationId);
+  const closeGeneration = pickString(payload.syncGeneration);
   if (!convId) return { ok: false, error: 'convId obrigatorio' };
 
   const notifyClosed = ({ chatId = null, motivo = 'genesys_agente', missing = false } = {}) => {
@@ -1044,6 +1054,24 @@ export const handleExtEncerrar = async (socket, payload = {}) => {
   if (chatConvEnd && chatConvEnd !== convId) {
     return { ok: false, error: 'convId_mismatch', chatId: chat.id };
   }
+  const currentGeneration = pickString(chat.genesysSyncGeneration);
+  if (
+    currentGeneration
+    && (
+      (closeGeneration && closeGeneration !== currentGeneration)
+      || (!closeGeneration && payload.closeEventId)
+    )
+  ) {
+    return {
+      ok: true,
+      stale: true,
+      ignored: true,
+      reason: closeGeneration ? 'stale_sync_generation' : 'missing_sync_generation',
+      chatId: chat.id,
+      convId,
+      currentSyncGeneration: currentGeneration,
+    };
+  }
   if (chat.status === 'closed') {
     notifyClosed({
       chatId: chat.id,
@@ -1055,9 +1083,15 @@ export const handleExtEncerrar = async (socket, payload = {}) => {
   const motivo = pickString(payload.motivo, payload.reason, 'genesys_agente');
   const now = new Date().toISOString();
 
+  let staleDuringLock = false;
   await withChatLock(chat.id, async () => {
     const live = await adapter.findOne('activeChats', { id: chat.id }, { projection: { _id: 0 } }) || chat;
     if (live.status === 'closed') return;
+    const liveGeneration = pickString(live.genesysSyncGeneration);
+    if (liveGeneration && closeGeneration !== liveGeneration) {
+      staleDuringLock = true;
+      return;
+    }
     live.status = 'closed';
     live.closedAt = now;
     live.updatedAt = now;
@@ -1075,9 +1109,29 @@ export const handleExtEncerrar = async (socket, payload = {}) => {
     await adapter.saveDocument('activeChats', live);
   });
 
+  if (staleDuringLock) {
+    return {
+      ok: true,
+      stale: true,
+      ignored: true,
+      reason: 'stale_sync_generation',
+      chatId: chat.id,
+      convId,
+    };
+  }
+
   notifyClosed({ chatId: chat.id, motivo });
 
   return { ok: true, chatId: chat.id, convId, motivo };
+};
+
+export const handleExtEncerrar = async (socket, payload = {}) => {
+  const convId = pickString(payload.convId, payload.conversationId, 'missing');
+  const tenantId = pickString(socket?.tenantId, 'missing');
+  return withLock(
+    `genesys-conversation:${tenantId}:${convId}`,
+    () => handleExtEncerrarUnlocked(socket, payload)
+  );
 };
 
 // ─── Fase 4: app → extensão ─────────────────────────────────────────────────

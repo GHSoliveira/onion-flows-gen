@@ -1,6 +1,6 @@
 importScripts("external-status.js", "lib/socket.io.min.js");
 
-const EXTENSION_BUILD = "2026.08.07.1";
+const EXTENSION_BUILD = "2026.08.07.2";
 const SETTINGS_KEY = "onionDevSettings";
 const AUTH_KEY = "onionDevAuth";
 const COMMUNICATIONS_KEY = "onionDevCommunications";
@@ -895,6 +895,26 @@ function mutateCloseOutbox(mutator) {
 async function removeCloseOutboxEvent(conversationId) {
   await mutateCloseOutbox((outbox) => { delete outbox[conversationId]; });
 }
+function cancelQueuedCloseForConversation(conversationId, activeGeneration = "") {
+  if (!UUID_RE.test(String(conversationId || ""))) return;
+  for (let index = queue.length - 1; index >= 0; index -= 1) {
+    const item = queue[index];
+    if (
+      item?.event === "ext:atendimento:encerrar"
+      && String(item?.payload?.convId || item?.payload?.conversationId || "") === conversationId
+      && String(item?.payload?.syncGeneration || "") !== activeGeneration
+    ) queue.splice(index, 1);
+  }
+  mutateCloseOutbox((outbox) => {
+    const pending = outbox[conversationId];
+    if (
+      pending
+      && String(pending?.payload?.syncGeneration || "") !== activeGeneration
+    ) delete outbox[conversationId];
+  }).catch((error) => {
+    log("warn", "Falha ao cancelar encerramento antigo", error?.message || "erro");
+  });
+}
 async function deliverReliableClose(entry) {
   const conversationId = String(entry?.conversationId || entry?.payload?.convId || "");
   if (
@@ -904,6 +924,12 @@ async function deliverReliableClose(entry) {
   ) return false;
   return new Promise((resolve) => {
     socket.timeout(ACK_TIMEOUT_MS).emit("ext:atendimento:encerrar", entry.payload, async (error, response) => {
+      if (!error && response?.ok === true && response?.stale === true) {
+        await removeCloseOutboxEvent(conversationId).catch(() => {});
+        log("info", "Encerramento antigo ignorado pelo Onion", conversationId.slice(0, 8));
+        resolve(true);
+        return;
+      }
       const completed = !error && (
         response?.ok === true
         || isTerminalClosedResponse(response)
@@ -941,14 +967,18 @@ async function deliverReliableClose(entry) {
 async function queueReliableClose(payload = {}) {
   const conversationId = String(payload.convId || payload.conversationId || "");
   if (!UUID_RE.test(conversationId)) return false;
+  const state = conversationState(conversationId);
+  const syncGeneration = String(payload.syncGeneration || state.syncGeneration || "");
   const closeOutbox = await loadOutbox(CLOSE_OUTBOX_KEY);
-  const existing = closeOutbox[conversationId];
+  const candidate = closeOutbox[conversationId];
+  const existing = candidate?.payload?.syncGeneration === syncGeneration ? candidate : null;
   const entry = {
     eventId: existing?.eventId || crypto.randomUUID(),
     conversationId,
     payload: {
       ...payload,
       convId: conversationId,
+      syncGeneration,
       closeEventId: existing?.eventId || crypto.randomUUID()
     },
     attempts: Number(existing?.attempts || 0),
@@ -957,7 +987,6 @@ async function queueReliableClose(payload = {}) {
   };
   entry.payload.closeEventId = entry.eventId;
   await mutateCloseOutbox((outbox) => { outbox[conversationId] = entry; });
-  const state = conversationState(conversationId);
   state.lifecycle = "CLOSING";
   return deliverReliableClose(entry);
 }
@@ -2251,6 +2280,7 @@ function reviveClosedConversationState(conversationId, state, source = "active-e
   state.backfilled = false;
   state.forceSnapshot = true;
   state.syncGeneration = crypto.randomUUID();
+  cancelQueuedCloseForConversation(conversationId, state.syncGeneration);
   state.messageIds = new Set();
   state.passivePendingMessageIds = new Set();
   state.passiveMediaPendingAt = new Map();
