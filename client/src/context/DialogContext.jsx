@@ -77,7 +77,7 @@ const ConfirmDialog = ({ title, message, confirmText, cancelText, type, onClose 
 
   return (
     <div
-      className="ui-overlay-fade fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+      className="ui-overlay-fade fixed inset-0 z-[300] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
       onClick={() => onClose(false)}
     >
       <div
@@ -139,7 +139,7 @@ const PromptDialog = ({ title, message, placeholder, defaultValue, confirmText, 
 
   return (
     <div
-      className="ui-overlay-fade fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+      className="ui-overlay-fade fixed inset-0 z-[300] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
       onClick={() => onClose(null)}
     >
       <div

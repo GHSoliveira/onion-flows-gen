@@ -3871,8 +3871,8 @@ const AgentWorkspace = () => {
     };
 
     return (
-      <div className="ui-overlay-fade fixed inset-0 z-[120] flex items-end justify-center bg-slate-950/60 p-3 backdrop-blur-sm sm:items-center" onClick={close}>
-        <div className="ui-modal-surface flex max-h-[94vh] w-full max-w-2xl flex-col overflow-hidden rounded-[26px] bg-white shadow-2xl dark:bg-slate-900" onClick={(event) => event.stopPropagation()}>
+      <div className="pointer-events-none fixed inset-x-3 bottom-3 top-16 z-[120] flex items-end justify-center sm:inset-auto sm:bottom-5 sm:right-5 sm:top-20 sm:w-[min(700px,calc(100vw-40px))] sm:items-stretch">
+        <div className="ui-modal-surface pointer-events-auto flex max-h-full w-full flex-col overflow-hidden rounded-[22px] border border-slate-200 bg-white shadow-[0_24px_80px_rgba(15,23,42,0.32)] ring-1 ring-black/5 dark:border-slate-700 dark:bg-slate-900 dark:ring-white/5">
           <header className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-100 px-5 py-4 dark:border-slate-800">
             <div className="min-w-0">
               <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.16em] text-blue-600 dark:text-blue-300"><ClipboardList size={14} />Operação IXC</div>
