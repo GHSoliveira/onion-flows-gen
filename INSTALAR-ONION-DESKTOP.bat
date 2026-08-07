@@ -77,7 +77,7 @@ if %NODE_MAJOR% LSS 20 (
   goto :failure
 )
 
-echo [1/3] Clonando a branch main no Desktop...
+echo [1/5] Clonando a branch main no Desktop...
 git clone --branch main --single-branch "%REPO_URL%" "%TARGET_DIR%"
 if errorlevel 1 (
   echo [ERRO] O Git nao conseguiu clonar o repositorio.
@@ -88,7 +88,7 @@ if errorlevel 1 (
 pushd "%TARGET_DIR%"
 
 echo.
-echo [2/3] Instalando dependencias do servidor...
+echo [2/5] Instalando dependencias do servidor...
 if exist "package-lock.json" (
   call npm ci --no-audit --no-fund
 ) else (
@@ -102,7 +102,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [3/3] Instalando dependencias da interface...
+echo [3/5] Instalando dependencias da interface...
 pushd "client"
 if exist "package-lock.json" (
   call npm ci --no-audit --no-fund
@@ -118,6 +118,32 @@ if not "%CLIENT_INSTALL_EXIT%"=="0" (
   goto :failure
 )
 
+echo.
+echo [4/5] Preparando e iniciando o Onion local...
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%TARGET_DIR%\scripts\ensure-sandbox-env.ps1"
+if errorlevel 1 (
+  popd
+  echo [ERRO] Nao foi possivel preparar a configuracao local.
+  echo O clone foi preservado em "%TARGET_DIR%" para diagnostico.
+  goto :failure
+)
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%TARGET_DIR%\scripts\start-sandbox.ps1"
+if errorlevel 1 (
+  popd
+  echo [ERRO] O Onion foi instalado, mas o servidor local nao iniciou corretamente.
+  echo Consulte os logs em "%TARGET_DIR%\sandbox\logs".
+  goto :failure
+)
+
+echo.
+echo [5/5] Preparando a extensao no navegador...
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%TARGET_DIR%\scripts\open-browser-extension-setup.ps1" -Root "%TARGET_DIR%"
+if errorlevel 1 (
+  echo [AVISO] O Onion esta funcionando, mas o navegador nao pode ser preparado automaticamente.
+  echo Abra chrome://extensions ou brave://extensions e carregue:
+  echo   "%TARGET_DIR%\genesys-onion-dev"
+)
+
 popd
 
 echo.
@@ -128,10 +154,14 @@ echo.
 echo Pasta:
 echo   "%TARGET_DIR%"
 echo.
-echo Proximo passo:
-echo   Execute START.bat dentro dessa pasta.
+echo Onion local:
+echo   http://127.0.0.1:3101
 echo.
-start "" explorer.exe "%TARGET_DIR%"
+echo Extensao:
+echo   A pasta foi aberta e o caminho foi copiado.
+echo   No navegador, ative o modo do desenvolvedor e clique em
+echo   "Carregar sem compactacao". Cole o caminho quando solicitado.
+echo.
 pause
 exit /b 0
 
@@ -230,6 +260,9 @@ if exist "%TARGET_DIR%" (
 ) else (
   echo Resultado: pronto para instalar.
 )
+echo.
+echo Ao instalar, o Onion sera iniciado e validado em http://127.0.0.1:3101.
+echo O navegador sera preparado para carregar a extensao local.
 echo.
 echo [OK] Verificacao concluida sem alterar o computador.
 exit /b 0

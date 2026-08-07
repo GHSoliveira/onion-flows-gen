@@ -14,7 +14,10 @@ Instalação automática em um computador novo:
 
 1. Baixe `INSTALAR-ONION-DESKTOP.bat` e execute-o.
 2. O instalador verifica Git, Node.js 20+ e npm, instala requisitos ausentes pelo winget, clona no Desktop e instala as dependências.
-3. Ele nunca sobrescreve uma pasta `onion-flows-gen` existente.
+3. Se tudo estiver correto, inicia e valida o Onion em `http://127.0.0.1:3101`.
+4. Abre o Onion e a página de extensões do Brave, Chrome ou Edge, copia o caminho da extensão e abre sua pasta.
+5. Por segurança do navegador, resta apenas ativar o modo do desenvolvedor e confirmar **Carregar sem compactação**.
+6. Ele nunca sobrescreve uma pasta `onion-flows-gen` existente.
 
 Instalação manual:
 

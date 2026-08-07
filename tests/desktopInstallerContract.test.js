@@ -16,5 +16,21 @@ test('instalador Windows prepara requisitos e clona com seguranca no Desktop', a
   assert.match(installer, /call npm ci --no-audit --no-fund/);
   assert.match(installer, /call npm -v/);
   assert.match(installer, /pushd "client"/);
+  assert.match(installer, /scripts\\ensure-sandbox-env\.ps1/);
+  assert.match(installer, /scripts\\start-sandbox\.ps1/);
+  assert.match(installer, /scripts\\open-browser-extension-setup\.ps1/);
   assert.doesNotMatch(installer, /(?:rmdir|rd|del)\s+\/s/i);
+});
+
+test('preparador abre o navegador ativo sem tentar automatizar a interface protegida', async () => {
+  const helper = await readFile(new URL('../scripts/open-browser-extension-setup.ps1', import.meta.url), 'utf8');
+
+  assert.match(helper, /genesys-onion-dev/);
+  assert.match(helper, /Set-Clipboard -Value \$extensionPath/);
+  assert.match(helper, /Get-Process -Name \$definition\.Process/);
+  assert.match(helper, /brave:\/\/extensions\//);
+  assert.match(helper, /chrome:\/\/extensions\//);
+  assert.match(helper, /edge:\/\/extensions\//);
+  assert.match(helper, /http:\/\/127\.0\.0\.1:3101/);
+  assert.doesNotMatch(helper, /SendKeys|Stop-Process|taskkill/i);
 });
