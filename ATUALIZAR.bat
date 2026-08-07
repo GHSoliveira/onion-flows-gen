@@ -3,6 +3,15 @@ setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 title OnionFlows - Atualizar pelo GitHub
 
+set "AUTO_MODE="
+set "UPDATE_REQUEST_ID=%~2"
+set "UPDATE_STATUS=%~dp0sandbox\update-status.txt"
+if /I "%~1"=="--auto" set "AUTO_MODE=1"
+if defined AUTO_MODE (
+  if not exist "%~dp0sandbox" mkdir "%~dp0sandbox" >nul 2>&1
+  >"%UPDATE_STATUS%" echo running^|%UPDATE_REQUEST_ID%
+)
+
 echo.
 echo ========================================================
 echo   OnionFlows - Atualizacao segura pelo GitHub
@@ -127,7 +136,11 @@ echo [OK] OnionFlows atualizado: !VERSAO_ANTIGA! -^> !VERSAO_NOVA!
 
 :sucesso
 echo.
-pause
+if defined AUTO_MODE (
+  >"%UPDATE_STATUS%" echo success^|%UPDATE_REQUEST_ID%^|!HEAD_ANTIGO!^|!HEAD_NOVO!
+) else (
+  pause
+)
 exit /b 0
 
 :falha_pos_merge
@@ -136,5 +149,9 @@ echo O codigo novo permanece instalado; nenhum reset automatico foi executado.
 
 :falha
 echo.
-pause
+if defined AUTO_MODE (
+  >"%UPDATE_STATUS%" echo failed^|%UPDATE_REQUEST_ID%^|update_failed
+) else (
+  pause
+)
 exit /b 1

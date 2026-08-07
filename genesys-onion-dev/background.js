@@ -1,6 +1,6 @@
 importScripts("external-status.js", "lib/socket.io.min.js");
 
-const EXTENSION_BUILD = "2026.08.07.2";
+const EXTENSION_BUILD = "2026.08.07.3";
 const SETTINGS_KEY = "onionDevSettings";
 const AUTH_KEY = "onionDevAuth";
 const COMMUNICATIONS_KEY = "onionDevCommunications";
@@ -5189,6 +5189,94 @@ async function cleanupClosedConversationState() {
   }
 }
 
+async function openOrFocusOnion(baseUrl) {
+  const origin = new URL(safeBaseUrl(baseUrl)).origin;
+  const tabs = await chrome.tabs.query({});
+  const existing = tabs.find((tab) => {
+    try { return new URL(String(tab.url || "")).origin === origin; } catch (_) { return false; }
+  });
+  if (existing?.id != null) {
+    await chrome.tabs.update(existing.id, { active: true });
+    if (existing.windowId != null) await chrome.windows.update(existing.windowId, { focused: true }).catch(() => {});
+    return existing.id;
+  }
+  const created = await chrome.tabs.create({ url: `${origin}/`, active: true });
+  return created?.id ?? null;
+}
+
+async function reloadOnionAndGenesysTabs(baseUrl) {
+  const onionOrigin = new URL(safeBaseUrl(baseUrl)).origin;
+  const tabs = await chrome.tabs.query({});
+  const targets = tabs.filter((tab) => {
+    try {
+      const target = new URL(String(tab.url || ""));
+      return target.origin === onionOrigin
+        || ["apps.sae1.pure.cloud", "app.sae1.pure.cloud"].includes(target.hostname);
+    } catch (_) {
+      return false;
+    }
+  });
+  await Promise.allSettled(
+    targets
+      .filter((tab) => tab.id != null)
+      .map((tab) => chrome.tabs.reload(tab.id, { bypassCache: true }))
+  );
+  return targets.length;
+}
+
+async function runLocalCompanionUpdate(requestedBaseUrl = "") {
+  const [cfg, credentials] = await Promise.all([settings(), auth()]);
+  if (!credentials?.token) throw new Error("Faça login no Onion antes de atualizar");
+  const baseUrl = safeBaseUrl(requestedBaseUrl || cfg.baseUrl);
+  const headers = {
+    authorization: `Bearer ${credentials.token}`,
+    accept: "application/json",
+    "content-type": "application/json"
+  };
+  const response = await fetch(`${baseUrl}/api/system/local-update`, {
+    method: "POST",
+    headers,
+    body: "{}"
+  });
+  const accepted = await response.json().catch(() => ({}));
+  if (!response.ok || !accepted?.requestId) {
+    throw new Error(accepted?.error || `Onion HTTP ${response.status}`);
+  }
+  await openOrFocusOnion(baseUrl);
+
+  const deadline = Date.now() + 3 * 60 * 1000;
+  let lastStatus = null;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    try {
+      const statusResponse = await fetch(`${baseUrl}/api/system/local-update/status`, {
+        headers: { authorization: `Bearer ${credentials.token}`, accept: "application/json" },
+        cache: "no-store"
+      });
+      if (!statusResponse.ok) continue;
+      const status = await statusResponse.json().catch(() => ({}));
+      if (status?.requestId !== accepted.requestId) continue;
+      lastStatus = status;
+      if (status.state === "failed") throw new Error(status.error || "Falha no atualizador local");
+      if (status.state !== "success") continue;
+      const reloadedTabs = await reloadOnionAndGenesysTabs(baseUrl);
+      const changed = Boolean(
+        status.fromVersion
+        && status.toVersion
+        && status.fromVersion !== status.toVersion
+      );
+      setTimeout(() => chrome.runtime.reload(), 1500);
+      return { ok: true, changed, reloadedTabs, fromVersion: status.fromVersion, toVersion: status.toVersion };
+    } catch (error) {
+      if (String(error?.message || "").includes("atualizador")) throw error;
+      // O servidor fica indisponível enquanto o BAT reinicia o Onion.
+    }
+  }
+  throw new Error(lastStatus?.state === "running"
+    ? "Atualização ainda não terminou"
+    : "Tempo esgotado aguardando o Onion reiniciar");
+}
+
 log("info", "Service worker Onion carregado", `build ${EXTENSION_BUILD}`);
 startupStorageRepair = migrateLegacyOutboxesToSession()
   .then(() => recoverOutboxStorageQuota())
@@ -5434,6 +5522,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (next.enabled) await ensureSocket(); else disconnect("disabled");
       sendResponse({ ok: true });
     })().catch((error) => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+  if (message.type === "DEV_LOCAL_UPDATE") {
+    runLocalCompanionUpdate(message.baseUrl)
+      .then((result) => sendResponse(result))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || "Falha ao atualizar ambiente" }));
     return true;
   }
   if (message.type === "DEV_STATUS") {

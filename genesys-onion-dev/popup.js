@@ -8,6 +8,7 @@ const apiGovernor = $("api-governor");
 const baseUrl = $("base-url");
 const loginArea = $("login-area");
 const session = $("session");
+const updateTools = $("update-tools");
 const bootLoader = $("boot-loader");
 const bootStartedAt = Date.now();
 let saving = false;
@@ -53,6 +54,7 @@ async function refresh() {
     apiGovernor.checked = state.apiGovernor !== false;
     baseUrl.value = state.baseUrl || "http://127.0.0.1:3101";
     loginArea.hidden = !!state.authenticated; session.hidden = !state.authenticated;
+    updateTools.hidden = !state.authenticated;
     $("user").textContent = `Login: ${state.user?.name || state.user?.username || "autenticado"}`;
     $("dot").className = state.connected ? "on" : "";
     const buildLabel = state.build ? ` · build ${state.build}` : "";
@@ -108,6 +110,27 @@ $("login").addEventListener("click", async () => {
   }
 });
 $("logout").addEventListener("click", async () => { await send({ type: "DEV_LOGOUT" }); refresh(); });
+$("update-all").addEventListener("click", async () => {
+  const button = $("update-all");
+  const status = $("update-status");
+  button.disabled = true;
+  updateTools.classList.add("is-running");
+  button.textContent = "Aguarde";
+  status.textContent = "Atualizando pelo GitHub…";
+  try {
+    const result = await send({ type: "DEV_LOCAL_UPDATE", baseUrl: baseUrl.value });
+    if (!result?.ok) throw new Error(result?.error || "Falha ao atualizar");
+    status.textContent = result.changed === false
+      ? "Tudo atualizado · recarregando páginas"
+      : "Atualização concluída · recarregando páginas";
+    button.textContent = "Pronto";
+  } catch (error) {
+    status.textContent = error?.message || "Falha ao atualizar ambiente";
+    button.textContent = "Tentar novamente";
+    button.disabled = false;
+    updateTools.classList.remove("is-running");
+  }
+});
 async function selectIxcOperator(operator) {
   const result = await send({ type: "IXC_OPERATOR_SELECT", techId: operator.id, techName: operator.name });
   if (!result?.ok) {

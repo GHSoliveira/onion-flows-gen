@@ -16,6 +16,7 @@ sandbox/data/
 sandbox/fake-whatsapp-media/
 sandbox/logs/
 sandbox/*.pid
+sandbox/update-status.txt
 db.test-backup.json
 data/onion-preferences.json
 nul
