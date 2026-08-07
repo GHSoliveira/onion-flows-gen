@@ -163,6 +163,7 @@ export const appendChatMessage = async (chatOrId, message = {}, options = {}) =>
     || null;
   const metaSource = String(normalized.meta?.source || message.meta?.source || '').toLowerCase();
   const senderKey = String(normalized.sender || '').toLowerCase();
+  const hasMedia = Boolean(normalized.media || message.media || message.attachment);
   const chatGx = String(chat.genesysConvId || chat.externalConvId || '').trim();
   const metaGx = String(
     normalized.meta?.genesysConvId
@@ -193,6 +194,7 @@ export const appendChatMessage = async (chatOrId, message = {}, options = {}) =>
     senderKey === 'agent'
     && metaSource !== 'agent_app'
     && normalized.text
+    && !hasMedia
   ) {
     const elsewhereMem = findRecentAppAgentSendElsewhere({
       chatId: chat.id,
@@ -312,7 +314,10 @@ export const appendChatMessage = async (chatOrId, message = {}, options = {}) =>
 
   // 3) eco Genesys da msg do agente já salva no app (ids diferentes, mesmo texto)
   //    Evita duplicata visual após F4 send + watch/hydrate — SÓ no mesmo chatId
-  if (!existingRow && normalized.text) {
+  // Anexos consecutivos costumam compartilhar apenas um placeholder (por
+  // exemplo, "[audio]"). Com IDs distintos, cada mídia é uma mensagem real e
+  // nunca pode ser fundida por semelhança textual.
+  if (!existingRow && normalized.text && !hasMedia) {
     if (senderKey === 'agent' || senderKey === 'bot' || senderKey === 'user') {
       const recent = await adapter.findMany(COLLECTION, {
         query: {

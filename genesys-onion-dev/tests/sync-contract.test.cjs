@@ -97,7 +97,7 @@ test("sincroniza clientes em paralelo limitado sem alterar o teto do Genesys", a
   assert.match(background, /mapWithConcurrency\([\s\S]*?MAX_PASSIVE_CONVERSATION_CONCURRENCY/);
   assert.match(background, /const entriesByConversation = new Map\(\)/);
   assert.match(background, /deltaDeliveriesInFlight\.has\(entry\.eventId\)/);
-  assert.match(background, /scheduleMediaHydration\(\(\) => hydrateGenesysMedia\(descriptor\)\)/);
+  assert.match(background, /scheduleMediaHydration\(\(\) => hydrateGenesysMedia\(descriptors\[index\]\)\)/);
   assert.match(background, /processPassiveConversationDiscovery\(message\),\s*processPassiveMessageDeltas\(message\)/);
 });
 test("roster autoritativo de mensagens repara cards ausentes sem perder o bloqueio", async () => {

@@ -1,6 +1,6 @@
-# Genesys Onion Dev
+# Onion Companion
 
-Extensão Chrome local que integra a sessão autenticada do usuário no Genesys ao Onion, mantendo o Genesys como motor principal do atendimento.
+Extensão Chrome local que integra a sessão autenticada do usuário no Genesys ao Onion Flows, mantendo o Genesys como motor principal do atendimento.
 
 ## Instalação
 

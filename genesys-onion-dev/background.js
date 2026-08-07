@@ -1,6 +1,6 @@
 importScripts("external-status.js", "lib/socket.io.min.js");
 
-const EXTENSION_BUILD = "2026.08.05.4";
+const EXTENSION_BUILD = "2026.08.07.1";
 const SETTINGS_KEY = "onionDevSettings";
 const AUTH_KEY = "onionDevAuth";
 const COMMUNICATIONS_KEY = "onionDevCommunications";

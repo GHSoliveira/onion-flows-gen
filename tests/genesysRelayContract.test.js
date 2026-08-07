@@ -131,8 +131,11 @@ test('evento de fechamento antigo nao remove card novo com conversationId reutil
 });
 
 test('mídias consecutivas mantêm identidade própria no espelho Genesys', async () => {
+  const messages = await loadChatMessagesSource();
   const workspace = await loadAgentWorkspaceSource();
   const extension = await readFile(new URL('../genesys-onion-dev/background.js', import.meta.url), 'utf8');
+  assert.match(messages, /const hasMedia = Boolean\(normalized\.media \|\| message\.media \|\| message\.attachment\)/);
+  assert.match(messages, /if \(!existingRow && normalized\.text && !hasMedia\)/);
   assert.match(workspace, /if \(aHasMedia \|\| bHasMedia\) return false/);
   assert.match(extension, /function genesysMediaDescriptors/);
   assert.match(extension, /additionalMedia: mediaItems\.slice\(1\)/);

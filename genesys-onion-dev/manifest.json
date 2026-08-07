@@ -1,11 +1,21 @@
 {
   "manifest_version": 3,
-  "name": "Genesys Onion Dev",
-  "version": "0.1.16",
-  "description": "Extensão isolada para testar o espelhamento Genesys para Onion.",
+  "name": "Onion Companion",
+  "version": "0.1.17",
+  "description": "Companion local do Onion Flows para atendimento no Genesys.",
+  "icons": {
+    "16": "assets/onion-favicon.png",
+    "32": "assets/onion-favicon.png",
+    "48": "assets/onion-favicon.png",
+    "128": "assets/onion-favicon.png"
+  },
   "background": { "service_worker": "background.js" },
   "action": {
-    "default_title": "Genesys Onion Dev",
+    "default_title": "Onion Companion",
+    "default_icon": {
+      "16": "assets/onion-favicon.png",
+      "32": "assets/onion-favicon.png"
+    },
     "default_popup": "popup.html"
   },
   "permissions": ["storage", "alarms", "tabs"],
