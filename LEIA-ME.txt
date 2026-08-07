@@ -10,6 +10,14 @@ Versão publicada: 5.3.19
 
 ## Como rodar
 
+Instalação automática em um computador novo:
+
+1. Baixe `INSTALAR-ONION-DESKTOP.bat` e execute-o.
+2. O instalador verifica Git, Node.js 20+ e npm, instala requisitos ausentes pelo winget, clona no Desktop e instala as dependências.
+3. Ele nunca sobrescreve uma pasta `onion-flows-gen` existente.
+
+Instalação manual:
+
 1. Extraia o pacote ou clone o repositório.
 2. Execute `START.bat`; a configuração local será criada e validada automaticamente.
 3. Abra http://127.0.0.1:3101.
