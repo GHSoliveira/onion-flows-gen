@@ -13,3 +13,13 @@ test('janela de OS rapido nao bloqueia a pagina e confirmacao fica acima', async
   assert.doesNotMatch(workspace, /fixed inset-0 z-\[120\][^\n]*bg-slate-950\/60/);
   assert.match(dialogs, /fixed inset-0 z-\[300\]/);
 });
+
+test('anexos da OS rapida exibem miniatura e abrem o visualizador completo', async () => {
+  const workspace = await load('../client/src/pages/AgentWorkspace.jsx');
+
+  assert.match(workspace, /const previewUrl = media\.resolvedUrl \|\| resolveMediaUrl\(media\.url\)/);
+  assert.match(workspace, /const openPreview = \(\) => openChatMedia/);
+  assert.match(workspace, /media\.type === 'image' \? <img src=\{previewUrl\}/);
+  assert.match(workspace, /media\.type === 'video' \? <video src=\{previewUrl\}/);
+  assert.match(workspace, /abrir preview/);
+});

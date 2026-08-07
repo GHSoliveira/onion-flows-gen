@@ -3915,7 +3915,44 @@ const AgentWorkspace = () => {
                 <label className="text-[9px] font-bold uppercase text-slate-500">Telefone<input value={ixcOsOperation.phone} onChange={(event) => setIxcOsOperation((previous) => ({ ...previous, phone: event.target.value }))} className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></label>
                 <label className="text-[9px] font-bold uppercase text-slate-500">Referência<input value={ixcOsOperation.reference} onChange={(event) => setIxcOsOperation((previous) => ({ ...previous, reference: event.target.value }))} className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></label>
               </div>
-              {chatMediaItems.some((media) => media.messageId) ? <div className="mt-3 grid gap-2 sm:grid-cols-2">{chatMediaItems.filter((media) => media.messageId).map((media) => { const selected = ixcOsOperation.selectedMedia?.[media.messageId]; return <label key={media.messageId} className={`flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-[10px] ${selected ? 'border-blue-300 bg-blue-50 text-blue-800 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-200' : 'border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300'}`}><input type="checkbox" checked={Boolean(selected)} onChange={(event) => setIxcOsOperation((previous) => { const next = { ...(previous.selectedMedia || {}) }; if (event.target.checked) next[media.messageId] = { messageId: media.messageId, fileName: media.fileName || 'Anexo', description: media.fileName || '' }; else delete next[media.messageId]; return { ...previous, selectedMedia: next }; })} /><span className="truncate">{media.fileName || media.type || 'Anexo'}</span></label>; })}</div> : <p className="mt-2 text-[10px] text-slate-400">Nenhum anexo disponível nesta conversa.</p>}
+              {chatMediaItems.some((media) => media.messageId) ? (
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {chatMediaItems.filter((media) => media.messageId).map((media) => {
+                    const selected = ixcOsOperation.selectedMedia?.[media.messageId];
+                    const previewUrl = media.resolvedUrl || resolveMediaUrl(media.url);
+                    const openPreview = () => openChatMedia({
+                      id: media.messageId,
+                      media: { url: media.url || previewUrl },
+                    });
+                    return (
+                      <div key={media.messageId} className={`flex items-center gap-2 rounded-xl border p-2 text-[10px] ${selected ? 'border-blue-300 bg-blue-50 text-blue-800 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-200' : 'border-slate-200 bg-white text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'}`}>
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 shrink-0"
+                          aria-label={`Selecionar ${media.fileName || media.type || 'anexo'}`}
+                          checked={Boolean(selected)}
+                          onChange={(event) => setIxcOsOperation((previous) => {
+                            const next = { ...(previous.selectedMedia || {}) };
+                            if (event.target.checked) next[media.messageId] = { messageId: media.messageId, fileName: media.fileName || 'Anexo', description: media.fileName || '' };
+                            else delete next[media.messageId];
+                            return { ...previous, selectedMedia: next };
+                          })}
+                        />
+                        <button type="button" onClick={openPreview} title="Abrir preview" className="relative flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-slate-100 text-slate-500 ring-1 ring-black/5 transition-transform hover:scale-[1.03] dark:bg-slate-800 dark:text-slate-300">
+                          {media.type === 'image' ? <img src={previewUrl} alt={media.fileName || 'Imagem'} className="h-full w-full object-cover" /> : null}
+                          {media.type === 'video' ? <video src={previewUrl} muted preload="metadata" className="pointer-events-none h-full w-full object-cover" /> : null}
+                          {media.type === 'audio' ? <AudioLines size={20} /> : null}
+                          {!['image', 'video', 'audio'].includes(media.type) ? <FileText size={20} /> : null}
+                        </button>
+                        <button type="button" onClick={openPreview} className="min-w-0 flex-1 text-left">
+                          <span className="block truncate font-semibold text-slate-700 dark:text-slate-200">{media.fileName || (media.type === 'audio' ? 'Áudio' : media.type === 'video' ? 'Vídeo' : media.type === 'image' ? 'Imagem' : 'Anexo')}</span>
+                          <span className="mt-0.5 block text-[8px] uppercase tracking-wide text-slate-400">{media.type || 'arquivo'} · abrir preview</span>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : <p className="mt-2 text-[10px] text-slate-400">Nenhum anexo disponível nesta conversa.</p>}
             </details>
           </div>
 
