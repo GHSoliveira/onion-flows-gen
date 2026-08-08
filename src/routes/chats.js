@@ -2,6 +2,7 @@ import express from 'express';
 import rateLimit from 'express-rate-limit';
 import net from 'node:net';
 import path from 'node:path';
+import os from 'node:os';
 import { promises as fs } from 'node:fs';
 import { authenticate } from '../middleware/auth.js';
 import { authorize } from '../middleware/authorization.js';
@@ -53,6 +54,7 @@ import {
 import { buildAiMemoryContext, getActiveAiMemories } from '../services/aiMemories.js';
 import { transcribeLocalAudio } from '../services/localAudioTranscription.js';
 import { uploadsRoot } from '../services/mediaStorage.js';
+import { detectMime } from '../utils/fileType.js';
 
 const router = express.Router();
 const MAX_HISTORY_LIMIT = 200;
@@ -166,6 +168,29 @@ const probeTcpPort = (host, port, timeoutMs = 1600) => new Promise((resolve) => 
 const CHAT_OPERATIONAL_ROLES = ['ADMIN', 'AGENT', 'SUPER_ADMIN'];
 const GENESYS_MEDIA_MAX_BYTES = 25 * 1024 * 1024;
 const AUDIO_FILE_PATTERN = /\.(mp3|ogg|oga|wav|m4a|aac|opus|weba|webm)(?:$|[?#])/i;
+const DICTATION_MAX_BYTES = 8 * 1024 * 1024;
+const DICTATION_MAX_DURATION_SECONDS = 120;
+const DICTATION_TEMP_ROOT = path.join(os.tmpdir(), 'onion-flows-dictation');
+const DICTATION_MIME_EXTENSIONS = new Map([
+  ['audio/ogg', '.ogg'],
+  ['audio/wav', '.wav'],
+  ['audio/mpeg', '.mp3'],
+  ['video/webm', '.webm'],
+  ['video/mp4', '.m4a'],
+]);
+
+const normalizeDictationMime = (value) => String(value || '')
+  .trim()
+  .toLowerCase()
+  .split(';')[0]
+  .trim();
+
+const isCompatibleDictationContainer = (declaredMime, detectedMime) => {
+  const declared = normalizeDictationMime(declaredMime);
+  if (declared === detectedMime) return true;
+  return (declared === 'audio/webm' && detectedMime === 'video/webm')
+    || (declared === 'audio/mp4' && detectedMime === 'video/mp4');
+};
 
 const resolveLocalAudioFile = async ({ tenantId, message }) => {
   const media = message?.media && typeof message.media === 'object'
@@ -1204,6 +1229,123 @@ router.post('/:id/media', authenticate, authorize(CHAT_OPERATIONAL_ROLES), requi
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Ditado local: recebe apenas o áudio bruto gravado no navegador, usa um
+// arquivo temporário fora da pasta pública e devolve texto para o rascunho.
+// Nada é salvo na conversa ou enviado ao cliente por esta rota.
+router.post('/:id/dictation', authenticate, authorize(CHAT_OPERATIONAL_ROLES), requireTenant, localTranscriptionLimiter, async (req, res) => {
+  let handle = null;
+  let filePath = '';
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    const chatId = asIdentifier(req.params.id, { maxLength: 200 });
+    if (!chatId) return res.status(400).json({ error: 'Chat inválido.' });
+
+    const chat = await loadChatById(req, res, chatId);
+    if (!chat) return;
+    if (!chat.agentId || String(chat.agentId) !== String(req.user?.id || '')) {
+      return res.status(403).json({ error: 'Este atendimento não está atribuído ao agente autenticado.' });
+    }
+    if (chat.status === 'waiting' || chat.outreachPendingReply === true) {
+      return res.status(409).json({ error: 'O ditado não está disponível enquanto o envio estiver bloqueado.' });
+    }
+
+    const declaredMime = normalizeDictationMime(req.headers['content-type']);
+    const declaredExtensions = {
+      'audio/webm': '.webm',
+      'audio/ogg': '.ogg',
+      'audio/mp4': '.m4a',
+      'audio/wav': '.wav',
+      'audio/mpeg': '.mp3',
+    };
+    const extension = declaredExtensions[declaredMime];
+    if (!extension) {
+      return res.status(415).json({ error: 'Formato de gravação não suportado.' });
+    }
+
+    const declaredLength = Number.parseInt(req.headers['content-length'] || '0', 10);
+    if (Number.isFinite(declaredLength) && declaredLength > DICTATION_MAX_BYTES) {
+      return res.status(413).json({ error: 'A gravação excede o limite local de 8 MB.' });
+    }
+    const declaredDuration = Number.parseFloat(req.headers['x-onion-duration-seconds'] || '0');
+    if (!Number.isFinite(declaredDuration) || declaredDuration <= 0 || declaredDuration > DICTATION_MAX_DURATION_SECONDS + 1) {
+      return res.status(400).json({ error: 'Duração da gravação inválida ou acima de 2 minutos.' });
+    }
+
+    await fs.mkdir(DICTATION_TEMP_ROOT, { recursive: true });
+    filePath = path.join(DICTATION_TEMP_ROOT, `${generateId('dictation')}${extension}`);
+    handle = await fs.open(filePath, 'wx');
+    let totalBytes = 0;
+    let signature = Buffer.alloc(0);
+    let tooLarge = false;
+    for await (const rawChunk of req) {
+      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
+      totalBytes += chunk.length;
+      if (signature.length < 64) {
+        signature = Buffer.concat([signature, chunk.subarray(0, 64 - signature.length)]);
+      }
+      if (totalBytes > DICTATION_MAX_BYTES) {
+        tooLarge = true;
+        continue;
+      }
+      await handle.write(chunk);
+    }
+    await handle.close();
+    handle = null;
+
+    if (tooLarge) {
+      const error = new Error('A gravação excede o limite local de 8 MB.');
+      error.status = 413;
+      throw error;
+    }
+    if (totalBytes < 256) {
+      const error = new Error('A gravação ficou vazia ou curta demais.');
+      error.status = 400;
+      throw error;
+    }
+    const detectedMime = detectMime(signature);
+    if (!DICTATION_MIME_EXTENSIONS.has(detectedMime) || !isCompatibleDictationContainer(declaredMime, detectedMime)) {
+      const error = new Error('O conteúdo recebido não corresponde a uma gravação de áudio suportada.');
+      error.status = 415;
+      throw error;
+    }
+
+    const result = await transcribeLocalAudio({
+      filePath,
+      cacheKey: `dictation:${chat.tenantId}:${chat.id}:${req.user.id}:${generateId('job')}`,
+    });
+    if (Number(result.duration || 0) > DICTATION_MAX_DURATION_SECONDS + 5) {
+      const error = new Error('A gravação excede o limite local de 2 minutos.');
+      error.status = 413;
+      throw error;
+    }
+    const text = String(result.text || '').trim().slice(0, 10_000);
+    return res.json({
+      ok: true,
+      transcription: {
+        text,
+        language: result.language || 'pt',
+        duration: result.duration,
+        model: result.model,
+        engine: 'faster-whisper-local',
+      },
+    });
+  } catch (error) {
+    const code = String(error?.code || 'LOCAL_DICTATION_FAILED');
+    const status = Number(error?.status)
+      || (code === 'LOCAL_TRANSCRIPTION_UNAVAILABLE' ? 503
+        : code === 'LOCAL_TRANSCRIPTION_QUEUE_FULL' ? 429
+          : code === 'LOCAL_TRANSCRIPTION_TIMEOUT' ? 504
+            : 500);
+    return res.status(status).json({
+      error: String(error?.message || 'Falha no ditado local').slice(0, 700),
+      code,
+    });
+  } finally {
+    await handle?.close().catch(() => {});
+    if (filePath) await fs.unlink(filePath).catch(() => {});
   }
 });
 
