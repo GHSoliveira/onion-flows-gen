@@ -1,6 +1,8 @@
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 import net from 'node:net';
+import path from 'node:path';
+import { promises as fs } from 'node:fs';
 import { authenticate } from '../middleware/auth.js';
 import { authorize } from '../middleware/authorization.js';
 import { requireTenant } from '../middleware/tenant.js';
@@ -49,6 +51,8 @@ import {
   relayFinalizeGenesysWithWrapup
 } from '../services/extensionAtendimento.js';
 import { buildAiMemoryContext, getActiveAiMemories } from '../services/aiMemories.js';
+import { transcribeLocalAudio } from '../services/localAudioTranscription.js';
+import { uploadsRoot } from '../services/mediaStorage.js';
 
 const router = express.Router();
 const MAX_HISTORY_LIMIT = 200;
@@ -61,6 +65,17 @@ const genesysAiSuggestionLimiter = rateLimit({
   handler: (_req, res) => res.status(429).json({
     error: 'Muitas analises em pouco tempo. Aguarde um minuto e tente novamente.',
     code: 'AI_SUGGESTION_RATE_LIMIT'
+  })
+});
+const localTranscriptionLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 12,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `${req.user?.id || 'anonymous'}:${req.tenantId || 'tenant'}`,
+  handler: (_req, res) => res.status(429).json({
+    error: 'Muitas transcrições solicitadas. Aguarde os áudios em andamento.',
+    code: 'LOCAL_TRANSCRIPTION_RATE_LIMIT'
   })
 });
 const genesysLocalFlushLimiter = rateLimit({
@@ -150,6 +165,83 @@ const probeTcpPort = (host, port, timeoutMs = 1600) => new Promise((resolve) => 
 // exclusivos de quem opera de fato (AGENT/ADMIN) ou de SUPER_ADMIN.
 const CHAT_OPERATIONAL_ROLES = ['ADMIN', 'AGENT', 'SUPER_ADMIN'];
 const GENESYS_MEDIA_MAX_BYTES = 25 * 1024 * 1024;
+const AUDIO_FILE_PATTERN = /\.(mp3|ogg|oga|wav|m4a|aac|opus|weba|webm)(?:$|[?#])/i;
+
+const resolveLocalAudioFile = async ({ tenantId, message }) => {
+  const media = message?.media && typeof message.media === 'object'
+    ? message.media
+    : (message?.attachment && typeof message.attachment === 'object' ? message.attachment : {});
+  const rawUrl = String(
+    media.url || media.mediaUrl || message?.mediaUrl || message?.attachmentUrl || ''
+  ).trim();
+  const mimeType = String(
+    media.mimeType || media.mime_type || message?.mimeType || message?.mime_type || ''
+  ).trim().toLowerCase();
+  const mediaType = String(
+    media.type || media.kind || message?.mediaType || message?.media_type || ''
+  ).trim().toLowerCase();
+  const fileNameHint = String(media.fileName || media.filename || message?.fileName || '').trim();
+  const isAudio = mediaType === 'audio'
+    || mediaType === 'voice'
+    || mediaType === 'ptt'
+    || mimeType.startsWith('audio/')
+    || mimeType === 'application/ogg'
+    || AUDIO_FILE_PATTERN.test(fileNameHint)
+    || AUDIO_FILE_PATTERN.test(rawUrl);
+  if (!isAudio || !rawUrl) {
+    const error = new Error('A mensagem selecionada não possui um áudio local válido.');
+    error.status = 400;
+    throw error;
+  }
+
+  let pathname = '';
+  try {
+    pathname = /^https?:\/\//i.test(rawUrl) ? new URL(rawUrl).pathname : rawUrl.split(/[?#]/)[0];
+  } catch {
+    pathname = '';
+  }
+  const uploadPrefix = `/uploads/${encodeURIComponent(tenantId)}/`;
+  if (!pathname.startsWith(uploadPrefix)) {
+    const error = new Error('O áudio ainda não está armazenado localmente no Onion.');
+    error.status = 409;
+    throw error;
+  }
+
+  let fileName = '';
+  try {
+    fileName = decodeURIComponent(pathname.slice(uploadPrefix.length));
+  } catch {
+    fileName = '';
+  }
+  if (!fileName || fileName !== path.basename(fileName)) {
+    const error = new Error('Caminho local do áudio inválido.');
+    error.status = 400;
+    throw error;
+  }
+
+  const root = path.resolve(uploadsRoot);
+  const tenantRoot = path.resolve(root, String(tenantId));
+  const filePath = path.resolve(tenantRoot, fileName);
+  if (!tenantRoot.startsWith(`${root}${path.sep}`) || !filePath.startsWith(`${tenantRoot}${path.sep}`)) {
+    const error = new Error('Caminho local do áudio fora do tenant.');
+    error.status = 400;
+    throw error;
+  }
+  let stat;
+  try {
+    stat = await fs.stat(filePath);
+  } catch {
+    const error = new Error('O arquivo de áudio local expirou. Recarregue a conversa antes de transcrever.');
+    error.status = 410;
+    throw error;
+  }
+  if (!stat.isFile() || stat.size <= 0 || stat.size > GENESYS_MEDIA_MAX_BYTES) {
+    const error = new Error('Arquivo de áudio vazio ou acima do limite de 25 MB.');
+    error.status = 400;
+    throw error;
+  }
+  return filePath;
+};
 
 // --- Input hardening helpers ---
 // Mongo operators ($ne, $gt, $regex…) and dot-notation keys must never reach a
@@ -1112,6 +1204,81 @@ router.post('/:id/media', authenticate, authorize(CHAT_OPERATIONAL_ROLES), requi
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Transcrição local sob demanda. O servidor resolve a mídia pelo chat e pela
+// messageId; o navegador nunca escolhe um caminho de arquivo. O worker Python
+// processa uma tarefa por vez e o resultado fica junto da mensagem efêmera.
+router.post('/:id/messages/:messageId/transcribe', authenticate, authorize(CHAT_OPERATIONAL_ROLES), requireTenant, localTranscriptionLimiter, async (req, res) => {
+  try {
+    const chatId = asIdentifier(req.params.id, { maxLength: 200 });
+    const messageId = asIdentifier(req.params.messageId, { maxLength: 240 });
+    if (!chatId || !messageId) return res.status(400).json({ error: 'Chat ou mensagem inválida.' });
+
+    const chat = await loadChatById(req, res, chatId);
+    if (!chat) return;
+    if (!chat.agentId || String(chat.agentId) !== String(req.user?.id || '')) {
+      return res.status(403).json({ error: 'Este atendimento não está atribuído ao agente autenticado.' });
+    }
+
+    let message = await getChatMessageById({
+      chatId: chat.id,
+      tenantId: chat.tenantId,
+      messageId,
+    });
+    if (!message) {
+      message = (Array.isArray(chat.messages) ? chat.messages : [])
+        .find((item) => String(item?.id || item?.messageId || '') === messageId) || null;
+    }
+    if (!message) return res.status(404).json({ error: 'Mensagem de áudio não encontrada neste atendimento.' });
+
+    const cached = message?.meta?.audioTranscription;
+    if (cached?.completedAt && typeof cached.text === 'string') {
+      return res.json({
+        ok: true,
+        cached: true,
+        transcription: cached,
+      });
+    }
+
+    const filePath = await resolveLocalAudioFile({ tenantId: chat.tenantId, message });
+    const result = await transcribeLocalAudio({
+      filePath,
+      cacheKey: `${chat.tenantId}:${chat.id}:${messageId}`,
+    });
+    const transcription = {
+      text: String(result.text || '').trim().slice(0, 20_000),
+      language: result.language || 'pt',
+      duration: result.duration,
+      model: result.model,
+      engine: 'faster-whisper-local',
+      completedAt: new Date().toISOString(),
+    };
+
+    await adapter.updateOne(
+      'chatMessages',
+      { tenantId: chat.tenantId, chatId: chat.id, messageId },
+      {
+        $set: {
+          'meta.audioTranscription': transcription,
+          updatedAt: transcription.completedAt,
+        },
+      }
+    );
+
+    return res.json({ ok: true, cached: false, transcription });
+  } catch (error) {
+    const code = String(error?.code || 'LOCAL_TRANSCRIPTION_FAILED');
+    const status = Number(error?.status)
+      || (code === 'LOCAL_TRANSCRIPTION_UNAVAILABLE' ? 503
+        : code === 'LOCAL_TRANSCRIPTION_QUEUE_FULL' ? 429
+          : code === 'LOCAL_TRANSCRIPTION_TIMEOUT' ? 504
+            : 500);
+    return res.status(status).json({
+      error: String(error?.message || 'Falha na transcrição local').slice(0, 700),
+      code,
+    });
   }
 });
 

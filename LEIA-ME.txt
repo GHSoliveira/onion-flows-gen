@@ -1,11 +1,12 @@
 # Onion Flows — pacote local companion
 
-Versão publicada: 5.3.20
+Versão publicada: 5.3.21
 
 ## Requisitos
 
 - Windows 10/11
 - Node.js 20+ com npm
+- Python 3.12 para transcrição local (o `START.bat` tenta instalar pelo winget)
 - Porta local 3101 livre
 
 ## Como rodar
@@ -24,6 +25,14 @@ Instalação manual:
 1. Extraia o pacote ou clone o repositório.
 2. Execute `START.bat`; a configuração local será criada e validada automaticamente.
 3. Abra http://127.0.0.1:3101.
+
+## Transcrição local de áudio
+
+- Clique em **Transcrever** abaixo de um áudio no atendimento.
+- O faster-whisper roda localmente em CPU, sem enviar o áudio para APIs externas.
+- Existe uma única fila de processamento para evitar sobrecarga.
+- O texto fica em cache somente junto da mensagem do atendimento local.
+- No primeiro uso, o modelo `small` é baixado; as próximas transcrições reutilizam o modelo.
 
 ## Logins locais iniciais
 

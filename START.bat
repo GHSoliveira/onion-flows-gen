@@ -54,6 +54,14 @@ if errorlevel 1 (
 )
 echo.
 
+echo [TRANSCRICAO] Validando mecanismo local gratuito...
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\setup-local-transcription.ps1" -InstallMissingRuntime
+if errorlevel 1 (
+  echo [AVISO] O Onion continuara funcionando, mas a transcricao local ficou indisponivel.
+  echo Execute START.bat novamente para tentar instalar esse recurso.
+)
+echo.
+
 if not exist "node_modules\" (
   echo [1/3] Instalando dependencias do backend...
   call npm install

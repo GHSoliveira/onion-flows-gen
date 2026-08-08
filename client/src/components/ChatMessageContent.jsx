@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Check, ExternalLink, FileText, List, MousePointerClick, Pause, Play, PlayCircle, Volume2, VolumeX
+  Captions, Check, Copy, ExternalLink, FileText, List, Loader2, MousePointerClick, Pause, Play, PlayCircle, Volume2, VolumeX
 } from 'lucide-react';
 import { API_BASE } from '../services/api';
+import { transcribeChatAudio } from '../services/transcription';
 import { findInteractiveSelection, parseInteractiveMessage } from '../utils/interactiveMessage';
 
 const BACKEND_ORIGIN = String(API_BASE || '').replace(/\/api\/?$/i, '');
+const audioTranscriptionCache = new Map();
 
 const resolveMediaUrl = (value) => {
   const source = String(value || '').trim();
@@ -204,13 +206,25 @@ const formatAudioTime = (value) => {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 };
 
-const CompactAudioPlayer = ({ url, mimeType, fileName, onOpen }) => {
+const CompactAudioPlayer = ({ url, mimeType, fileName, onOpen, transcriptionRequest }) => {
   const audioRef = useRef(null);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [muted, setMuted] = useState(false);
   const [failed, setFailed] = useState(false);
+  const transcriptionKey = transcriptionRequest?.chatId && transcriptionRequest?.messageId
+    ? `${transcriptionRequest.chatId}:${transcriptionRequest.messageId}`
+    : '';
+  const initialTranscription = transcriptionRequest?.initial;
+  const [transcription, setTranscription] = useState(() => {
+    const remembered = transcriptionKey ? audioTranscriptionCache.get(transcriptionKey) : null;
+    if (remembered) return { status: 'ready', data: remembered, error: '' };
+    if (initialTranscription?.completedAt && typeof initialTranscription.text === 'string') {
+      return { status: 'ready', data: initialTranscription, error: '' };
+    }
+    return { status: 'idle', data: null, error: '' };
+  });
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -222,6 +236,39 @@ const CompactAudioPlayer = ({ url, mimeType, fileName, onOpen }) => {
     setDuration(0);
     setFailed(false);
   }, [url, mimeType]);
+
+  useEffect(() => {
+    const remembered = transcriptionKey ? audioTranscriptionCache.get(transcriptionKey) : null;
+    if (remembered) {
+      setTranscription({ status: 'ready', data: remembered, error: '' });
+      return;
+    }
+    if (initialTranscription?.completedAt && typeof initialTranscription.text === 'string') {
+      if (transcriptionKey) audioTranscriptionCache.set(transcriptionKey, initialTranscription);
+      setTranscription({ status: 'ready', data: initialTranscription, error: '' });
+      return;
+    }
+    setTranscription({ status: 'idle', data: null, error: '' });
+  }, [transcriptionKey, initialTranscription?.completedAt, initialTranscription?.text]);
+
+  const requestTranscription = async () => {
+    if (!transcriptionRequest?.chatId || !transcriptionRequest?.messageId || transcription.status === 'loading') return;
+    setTranscription({ status: 'loading', data: null, error: '' });
+    try {
+      const result = await transcribeChatAudio(transcriptionRequest);
+      const data = result?.transcription || { text: '', completedAt: new Date().toISOString() };
+      if (transcriptionKey) audioTranscriptionCache.set(transcriptionKey, data);
+      setTranscription({ status: 'ready', data, error: '' });
+    } catch (error) {
+      setTranscription({ status: 'error', data: null, error: error?.message || 'Falha na transcrição' });
+    }
+  };
+
+  const copyTranscription = async () => {
+    const text = String(transcription.data?.text || '').trim();
+    if (!text) return;
+    try { await navigator.clipboard.writeText(text); } catch {}
+  };
 
   const togglePlayback = async () => {
     const audio = audioRef.current;
@@ -257,6 +304,7 @@ const CompactAudioPlayer = ({ url, mimeType, fileName, onOpen }) => {
     : 0;
 
   return (
+    <div className="space-y-1.5">
     <div className="compact-audio-player" title={fileName || 'Áudio'}>
       <audio
         ref={audioRef}
@@ -327,10 +375,32 @@ const CompactAudioPlayer = ({ url, mimeType, fileName, onOpen }) => {
         </button>
       ) : null}
     </div>
+      {transcriptionRequest?.chatId && transcriptionRequest?.messageId ? (
+        <div className="rounded-lg border border-black/10 bg-black/[0.035] px-2.5 py-2 text-[10px] dark:border-white/10 dark:bg-white/[0.04]">
+          {transcription.status === 'ready' ? (
+            <div>
+              <div className="mb-1 flex items-center justify-between gap-2 font-bold uppercase tracking-wide opacity-60">
+                <span className="inline-flex items-center gap-1"><Captions size={11} />Transcrição</span>
+                {String(transcription.data?.text || '').trim() ? <button type="button" onClick={copyTranscription} className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 normal-case tracking-normal opacity-75 hover:bg-black/5 hover:opacity-100 dark:hover:bg-white/10"><Copy size={10} />Copiar</button> : null}
+              </div>
+              <div className="whitespace-pre-wrap break-words leading-4 opacity-90">{String(transcription.data?.text || '').trim() || 'Nenhuma fala identificada neste áudio.'}</div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-2">
+              <span className={`min-w-0 leading-4 ${transcription.status === 'error' ? 'text-red-500 dark:text-red-300' : 'opacity-60'}`}>{transcription.status === 'loading' ? 'Processando localmente…' : transcription.status === 'error' ? transcription.error : 'Transcrição local sob demanda'}</span>
+              <button type="button" onClick={requestTranscription} disabled={transcription.status === 'loading'} className="inline-flex shrink-0 items-center gap-1 rounded-md border border-black/10 bg-white/60 px-2 py-1 font-bold transition-colors hover:bg-white disabled:cursor-wait disabled:opacity-60 dark:border-white/10 dark:bg-white/10 dark:hover:bg-white/15">
+                {transcription.status === 'loading' ? <Loader2 size={11} className="animate-spin" /> : <Captions size={11} />}
+                {transcription.status === 'error' ? 'Tentar novamente' : transcription.status === 'loading' ? 'Transcrevendo' : 'Transcrever'}
+              </button>
+            </div>
+          )}
+        </div>
+      ) : null}
+    </div>
   );
 };
 
-const renderMedia = (mediaPayload, { onOpen } = {}) => {
+const renderMedia = (mediaPayload, { onOpen, transcriptionRequest } = {}) => {
   if (!mediaPayload?.url) return null;
   const url = resolveMediaUrl(mediaPayload.url);
   const type = String(mediaPayload.type || 'document').toLowerCase();
@@ -402,6 +472,7 @@ const renderMedia = (mediaPayload, { onOpen } = {}) => {
           mimeType={safeMimeType}
           fileName={mediaPayload.fileName}
           onOpen={typeof onOpen === 'function' ? open : undefined}
+          transcriptionRequest={transcriptionRequest}
         />
         {typeof onOpen !== 'function' ? (
           <a
@@ -526,7 +597,7 @@ const InteractiveMessageCard = ({ interactive, selectedOption }) => {
   );
 };
 
-const ChatMessageContent = ({ message, messages, messageIndex, onOpenMedia }) => {
+const ChatMessageContent = ({ message, messages, messageIndex, onOpenMedia, chatId }) => {
   const media = normalizeMediaPayload(message);
   const caption = String(media?.caption || '').trim();
   const text = String(message?.text || '').trim();
@@ -550,6 +621,14 @@ const ChatMessageContent = ({ message, messages, messageIndex, onOpenMedia }) =>
   const handleOpen = typeof onOpenMedia === 'function'
     ? () => onOpenMedia(message, media)
     : undefined;
+  const messageId = String(message?.id || message?.messageId || '').trim();
+  const transcriptionRequest = media?.type === 'audio' && chatId && messageId
+    ? {
+        chatId,
+        messageId,
+        initial: message?.meta?.audioTranscription || null,
+      }
+    : null;
 
   if (interactive) {
     return <InteractiveMessageCard interactive={interactive} selectedOption={selectedOption} />;
@@ -557,7 +636,7 @@ const ChatMessageContent = ({ message, messages, messageIndex, onOpenMedia }) =>
 
   return (
     <div className="space-y-2">
-      {media && renderMedia(media, { onOpen: handleOpen })}
+      {media && renderMedia(media, { onOpen: handleOpen, transcriptionRequest })}
       {showText && <div className="whitespace-pre-wrap break-words">{text || '-'}</div>}
     </div>
   );
