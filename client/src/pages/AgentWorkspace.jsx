@@ -23,6 +23,7 @@ import OnionAiIcon from '../components/OnionAiIcon';
 import toast from 'react-hot-toast';
 import { CenterSkeleton } from '../components/LoadingSkeleton';
 import { sortChatsForMode } from '../utils/chatSorting';
+import { summarizeIxcOsAlerts } from '../utils/ixcOsAlerts';
 
 const chatOrderStorageKey = (userId, listKey) => `agentChatOrder:${userId || 'anon'}:${listKey}`;
 const chatSortStorageKey = (userId) => `agentChatSort:${userId || 'anon'}`;
@@ -208,6 +209,43 @@ const validOpenSupportN1Orders = (details) => (
     .filter(isValidOpenSupportN1Order)
     .sort((left, right) => Number(right?.osId || 0) - Number(left?.osId || 0))
 );
+const IxcOsAlertBadges = ({ details, compact = false }) => {
+  const alerts = summarizeIxcOsAlerts(details);
+  if (!alerts.scheduled.count && !alerts.openPre.count) return null;
+  const scheduledSubject = alerts.scheduled.subjects[0] || 'Assunto não informado';
+  const extraScheduledSubjects = Math.max(0, alerts.scheduled.subjects.length - 1);
+  const scheduledTitle = alerts.scheduled.subjects.length
+    ? alerts.scheduled.subjects.join(' · ')
+    : 'OS agendada sem assunto informado';
+  const preTitle = alerts.openPre.subjects.length
+    ? alerts.openPre.subjects.join(' · ')
+    : 'PRÉ OS em aberto';
+
+  return (
+    <div className={`flex min-w-0 items-center gap-1 overflow-hidden ${compact ? 'shrink' : 'mt-1 flex-wrap'}`} data-ixc-os-alerts>
+      {alerts.scheduled.count ? (
+        <span
+          className={`${compact ? 'max-w-52' : 'max-w-full'} inline-flex min-w-0 items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[8px] font-medium leading-none text-amber-700 ring-1 ring-inset ring-amber-200 dark:bg-amber-950/35 dark:text-amber-200 dark:ring-amber-900/60`}
+          title={`${alerts.scheduled.count} OS agendada(s) · ${scheduledTitle}`}
+        >
+          <Clock size={9} className="shrink-0" />
+          <span className="shrink-0">({alerts.scheduled.count}) OS {alerts.scheduled.count === 1 ? 'Agendada' : 'Agendadas'} ·</span>
+          <strong className="truncate">{scheduledSubject}</strong>
+          {extraScheduledSubjects ? <span className="shrink-0">+{extraScheduledSubjects}</span> : null}
+        </span>
+      ) : null}
+      {alerts.openPre.count ? (
+        <span
+          className="inline-flex shrink-0 items-center gap-1 rounded-full bg-rose-50 px-1.5 py-0.5 text-[8px] font-semibold leading-none text-rose-700 ring-1 ring-inset ring-rose-200 dark:bg-rose-950/35 dark:text-rose-200 dark:ring-rose-900/60"
+          title={`${alerts.openPre.count} PRÉ OS em aberto · ${preTitle}`}
+        >
+          <TriangleAlert size={9} />
+          {alerts.openPre.count > 1 ? `(${alerts.openPre.count}) ` : ''}PRÉ OS em aberto
+        </span>
+      ) : null}
+    </div>
+  );
+};
 const IXC_OS_TASKS = [
   ['4533', 'BC - OUTROS'],
   ['4629', 'REPARO - CÂMERA'],
@@ -3233,6 +3271,7 @@ const AgentWorkspace = () => {
       || resolvedWaId
       || (waitingTone ? 'Anonimo' : 'Cliente');
     const preview = getLastMessagePreview(chat);
+    const ixcOrderDetails = chat?.ixcData || chat?.vars?.ixc_dados || chat?.variables?.ixc_dados || null;
     const lastMessage = Array.isArray(chat?.messages) ? chat.messages[chat.messages.length - 1] : null;
     const unreadCount = Number(unreadByChatId[chat.id] || 0);
     const showGenesysInactivity = isGenesysChatClient(chat) && Boolean(resolveGenesysLastActivityAt(chat));
@@ -3302,6 +3341,7 @@ const AgentWorkspace = () => {
                 </div>
               </div>
               <div className={`mt-px truncate text-[10px] leading-tight text-slate-500 dark:text-slate-400 ${showGenesysInactivity ? 'pr-10' : ''}`}>{preview}</div>
+              <IxcOsAlertBadges details={ixcOrderDetails} />
               {waitingTone ? (
                 <div className="text-[9px] font-semibold text-orange-600 dark:text-orange-300">
                   Esperando ha <WaitingElapsed since={chat.waitingSince || chat.transferredAt || chat.createdAt} />
@@ -5086,6 +5126,7 @@ const AgentWorkspace = () => {
                           {selectedHeaderPonId}
                         </button>
                       ) : null}
+                      <IxcOsAlertBadges details={selectedHeaderIxc} compact />
                     </div>
                     {selectedHeaderHasData ? (
                       <button
