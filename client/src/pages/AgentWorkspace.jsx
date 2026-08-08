@@ -24,6 +24,7 @@ import toast from 'react-hot-toast';
 import { CenterSkeleton } from '../components/LoadingSkeleton';
 import { sortChatsForMode } from '../utils/chatSorting';
 import { summarizeIxcOsAlerts } from '../utils/ixcOsAlerts';
+import { findIxcSectorSuggestion, IXC_SECTOR_OPTIONS } from '../utils/ixcSectorCatalog';
 
 const chatOrderStorageKey = (userId, listKey) => `agentChatOrder:${userId || 'anon'}:${listKey}`;
 const chatSortStorageKey = (userId) => `agentChatSort:${userId || 'anon'}`;
@@ -679,7 +680,7 @@ const AgentWorkspace = () => {
   const [ixcDetailsModal, setIxcDetailsModal] = useState({ open: false, chatId: '', closing: false });
   const [ixcOsOperation, setIxcOsOperation] = useState({
     open: false, order: null, diagnosisId: '', diagnosisQuery: '',
-    nextTaskCode: '', nextTaskQuery: '', sectorCode: '', visitDate: defaultIxcVisitDate(),
+    nextTaskCode: '', nextTaskQuery: '', sectorCode: '', sectorQuery: '', visitDate: defaultIxcVisitDate(),
     visitPeriod: 'MANHA', periodNote: '', description: '', reference: '',
     address: '', phone: '', selectedMedia: {}, attachmentUploading: false, submitting: false,
     chatId: '', convId: '', clientId: '', requestId: '',
@@ -3785,6 +3786,10 @@ const AgentWorkspace = () => {
 
   const openIxcOsOperation = (order) => {
     const details = selectedChat?.ixcData || chatVars?.ixc_dados;
+    const suggestedSector = findIxcSectorSuggestion(
+      order?.city || details?.city,
+      details?.branch || details?.branchId || details?.filial
+    );
     const fallbackAddress = [
       details?.street, details?.houseNumber, details?.neighborhood, details?.city, details?.state,
     ].filter(Boolean).join(', ');
@@ -3796,7 +3801,8 @@ const AgentWorkspace = () => {
       diagnosisQuery: '',
       nextTaskCode: '',
       nextTaskQuery: '',
-      sectorCode: '',
+      sectorCode: suggestedSector?.code || '',
+      sectorQuery: suggestedSector ? `${suggestedSector.code} — ${suggestedSector.title}` : '',
       visitDate: defaultIxcVisitDate(),
       visitPeriod: 'MANHA',
       periodNote: '',
@@ -4078,7 +4084,7 @@ const AgentWorkspace = () => {
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <IxcCatalogSearch label="Diagnóstico" placeholder="Código ou diagnóstico..." options={IXC_OS_DIAGNOSES} query={ixcOsOperation.diagnosisQuery} selectedCode={ixcOsOperation.diagnosisId} onChange={(value) => setIxcOsOperation((previous) => ({ ...previous, diagnosisQuery: value, diagnosisId: '' }))} onSelect={(code, display) => setIxcOsOperation((previous) => ({ ...previous, diagnosisId: code, diagnosisQuery: display }))} />
               <IxcCatalogSearch label="Próxima tarefa" placeholder="Código ou tarefa..." options={IXC_OS_TASKS} query={ixcOsOperation.nextTaskQuery} selectedCode={ixcOsOperation.nextTaskCode} onChange={(value) => setIxcOsOperation((previous) => ({ ...previous, nextTaskQuery: value, nextTaskCode: '' }))} onSelect={(code, display) => setIxcOsOperation((previous) => ({ ...previous, nextTaskCode: code, nextTaskQuery: display }))} />
-              {!finalizeOnly ? <label className="text-[9px] font-bold uppercase tracking-wide text-slate-500">Código do setor técnico<input value={ixcOsOperation.sectorCode} onChange={(event) => setIxcOsOperation((previous) => ({ ...previous, sectorCode: event.target.value.replace(/\D/g, '') }))} inputMode="numeric" placeholder="Ex: 63" className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-800 outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></label> : null}
+              {!finalizeOnly ? <IxcCatalogSearch label="Setor técnico" placeholder="Código, cidade ou setor..." options={IXC_SECTOR_OPTIONS} query={ixcOsOperation.sectorQuery} selectedCode={ixcOsOperation.sectorCode} onChange={(value) => setIxcOsOperation((previous) => ({ ...previous, sectorQuery: value, sectorCode: '' }))} onSelect={(code, display) => setIxcOsOperation((previous) => ({ ...previous, sectorCode: code, sectorQuery: display }))} /> : null}
               {!finalizeOnly ? <label className="text-[9px] font-bold uppercase tracking-wide text-slate-500">Data da visita<input type="datetime-local" value={ixcOsOperation.visitDate} onChange={(event) => setIxcOsOperation((previous) => ({ ...previous, visitDate: event.target.value }))} className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-800 outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></label> : null}
               <div className="text-[9px] font-bold uppercase tracking-wide text-slate-500">Período<div className="mt-1 flex min-h-10 items-center gap-4 rounded-xl border border-slate-200 px-3 dark:border-slate-700"><label className="flex items-center gap-1.5 text-xs font-semibold normal-case text-slate-700 dark:text-slate-200"><input type="radio" checked={ixcOsOperation.visitPeriod === 'MANHA'} onChange={() => setIxcVisitPeriod('MANHA')} />Manhã</label><label className="flex items-center gap-1.5 text-xs font-semibold normal-case text-slate-700 dark:text-slate-200"><input type="radio" checked={ixcOsOperation.visitPeriod === 'TARDE'} onChange={() => setIxcVisitPeriod('TARDE')} />Tarde</label></div></div>
               <label className="text-[9px] font-bold uppercase tracking-wide text-slate-500">Observação de horário<input value={ixcOsOperation.periodNote} onChange={(event) => setIxcOsOperation((previous) => ({ ...previous, periodNote: event.target.value }))} placeholder="Ex: após as 09h" className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-800 outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></label>
@@ -4343,7 +4349,7 @@ const AgentWorkspace = () => {
                             <div className="grid gap-3 sm:grid-cols-2">
                               <IxcCatalogSearch label="Diagnóstico" placeholder="Digite código ou diagnóstico..." options={IXC_OS_DIAGNOSES} query={ixcOsOperation.diagnosisQuery} selectedCode={ixcOsOperation.diagnosisId} onChange={(value) => setIxcOsOperation((previous) => ({ ...previous, diagnosisQuery: value, diagnosisId: '' }))} onSelect={(code, display) => setIxcOsOperation((previous) => ({ ...previous, diagnosisId: code, diagnosisQuery: display }))} />
                               <IxcCatalogSearch label="Próxima tarefa" placeholder="Digite código ou nome da tarefa..." options={IXC_OS_TASKS} query={ixcOsOperation.nextTaskQuery} selectedCode={ixcOsOperation.nextTaskCode} onChange={(value) => setIxcOsOperation((previous) => ({ ...previous, nextTaskQuery: value, nextTaskCode: '' }))} onSelect={(code, display) => setIxcOsOperation((previous) => ({ ...previous, nextTaskCode: code, nextTaskQuery: display }))} />
-                              {!PRE_OS_TASK_CODES.has(ixcOsOperation.nextTaskCode) ? <label className="text-[9px] font-bold uppercase tracking-wide text-slate-500">Código do setor técnico<input value={ixcOsOperation.sectorCode} onChange={(event) => setIxcOsOperation((previous) => ({ ...previous, sectorCode: event.target.value.replace(/\D/g, '') }))} inputMode="numeric" placeholder="Ex: 63" className="mt-1 w-full rounded-md border border-slate-200 bg-white px-2.5 py-2 text-[10px] text-slate-800 outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></label> : null}
+                              {!PRE_OS_TASK_CODES.has(ixcOsOperation.nextTaskCode) ? <IxcCatalogSearch label="Setor técnico" placeholder="Código, cidade ou setor..." options={IXC_SECTOR_OPTIONS} query={ixcOsOperation.sectorQuery} selectedCode={ixcOsOperation.sectorCode} onChange={(value) => setIxcOsOperation((previous) => ({ ...previous, sectorQuery: value, sectorCode: '' }))} onSelect={(code, display) => setIxcOsOperation((previous) => ({ ...previous, sectorCode: code, sectorQuery: display }))} /> : null}
                               <div className={`text-[9px] font-bold uppercase tracking-wide text-slate-500 ${PRE_OS_TASK_CODES.has(ixcOsOperation.nextTaskCode) ? 'sm:col-span-2' : ''}`}>
                                 Período
                                 <div className="mt-1 flex min-h-8 items-center gap-3 rounded-md border border-slate-200 bg-white px-2.5 dark:border-slate-700 dark:bg-slate-800">
