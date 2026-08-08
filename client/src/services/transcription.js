@@ -16,4 +16,3 @@ export const transcribeChatAudio = async ({ chatId, messageId }) => {
   }
   return payload;
 };
-
