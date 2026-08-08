@@ -3271,7 +3271,6 @@ const AgentWorkspace = () => {
       || resolvedWaId
       || (waitingTone ? 'Anonimo' : 'Cliente');
     const preview = getLastMessagePreview(chat);
-    const ixcOrderDetails = chat?.ixcData || chat?.vars?.ixc_dados || chat?.variables?.ixc_dados || null;
     const lastMessage = Array.isArray(chat?.messages) ? chat.messages[chat.messages.length - 1] : null;
     const unreadCount = Number(unreadByChatId[chat.id] || 0);
     const showGenesysInactivity = isGenesysChatClient(chat) && Boolean(resolveGenesysLastActivityAt(chat));
@@ -3341,7 +3340,6 @@ const AgentWorkspace = () => {
                 </div>
               </div>
               <div className={`mt-px truncate text-[10px] leading-tight text-slate-500 dark:text-slate-400 ${showGenesysInactivity ? 'pr-10' : ''}`}>{preview}</div>
-              <IxcOsAlertBadges details={ixcOrderDetails} />
               {waitingTone ? (
                 <div className="text-[9px] font-semibold text-orange-600 dark:text-orange-300">
                   Esperando ha <WaitingElapsed since={chat.waitingSince || chat.transferredAt || chat.createdAt} />

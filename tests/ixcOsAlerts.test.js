@@ -30,13 +30,13 @@ test('alerta PRÉ considera somente OS ainda abertas cujo assunto começa com PR
   assert.deepEqual(alerts.openPre.subjects, ['PRÉ - O.S SEM ACESSO']);
 });
 
-test('cards e header usam o mesmo resumo IXC em cache', async () => {
+test('alertas de OS aparecem somente no header do atendimento', async () => {
   const workspace = await readFile(
     new URL('../client/src/pages/AgentWorkspace.jsx', import.meta.url),
     'utf8'
   );
 
-  assert.match(workspace, /<IxcOsAlertBadges details=\{ixcOrderDetails\} \/>/);
   assert.match(workspace, /<IxcOsAlertBadges details=\{selectedHeaderIxc\} compact \/>/);
+  assert.equal((workspace.match(/<IxcOsAlertBadges /g) || []).length, 1);
   assert.match(workspace, /PRÉ OS em aberto/);
 });
