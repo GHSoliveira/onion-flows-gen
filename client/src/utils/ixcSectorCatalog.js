@@ -90,4 +90,3 @@ export const findIxcSectorSuggestion = (city, branch) => {
   const match = IXC_SECTOR_OPTIONS.find(([, title]) => normalize(title).replace(/^TECNICO\s*-\s*/, '') === aliasKey);
   return match ? { code: match[0], title: match[1] } : null;
 };
-
