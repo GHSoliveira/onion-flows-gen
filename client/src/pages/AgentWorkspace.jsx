@@ -308,6 +308,9 @@ const formatInactivityRemaining = (remainingMs) => {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 };
 
+const HEADER_ICON_BUTTON_CLASS = 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-transparent transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent dark:hover:bg-slate-800';
+const COMPACT_HEADER_ICON_BUTTON_CLASS = 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-transparent transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent dark:hover:bg-slate-800';
+
 const GenesysInactivityLiquid = ({ chat }) => {
   const lastActivityAt = resolveGenesysLastActivityAt(chat);
   const now = useSharedClock(Boolean(lastActivityAt));
@@ -4786,7 +4789,7 @@ const AgentWorkspace = () => {
                 aria-label="Limpar clientes Genesys do Onion"
                 onClick={handleFlushGenesysLocal}
                 disabled={genesysFlushLoading || ![...myChats, ...waitingChats].some(isGenesysChatClient)}
-                className="flex h-7 w-7 items-center justify-center rounded-full border border-red-200 bg-red-50 text-red-500 shadow-sm transition-colors hover:bg-red-100 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-35 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300 dark:hover:bg-red-950/60"
+                className={`${COMPACT_HEADER_ICON_BUTTON_CLASS} text-red-500 hover:text-red-700 dark:text-red-300`}
               >
                 {genesysFlushLoading ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
               </button>
@@ -4794,7 +4797,7 @@ const AgentWorkspace = () => {
                 type="button"
                 title="Nome e aparência"
                 onClick={openAppearanceSettings}
-                className="flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:bg-slate-50 hover:text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                className={`${COMPACT_HEADER_ICON_BUTTON_CLASS} text-slate-500 hover:text-slate-800 dark:text-slate-300 dark:hover:text-white`}
               >
                 <Settings size={12} />
               </button>
@@ -4899,15 +4902,15 @@ const AgentWorkspace = () => {
             <header className="z-10 border-b border-slate-200 bg-white/90 px-2.5 py-2 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/90 lg:px-3">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-2">
-                  {isMobileView ? <button type="button" onClick={() => setShowMobileChat(false)} className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-600 transition-colors hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"><ArrowLeft size={16} /></button> : null}
+                  {isMobileView ? <button type="button" onClick={() => setShowMobileChat(false)} className={`${HEADER_ICON_BUTTON_CLASS} text-slate-500 hover:text-slate-800 dark:text-slate-300 dark:hover:text-white`} title="Voltar para os atendimentos" aria-label="Voltar para os atendimentos"><ArrowLeft size={16} /></button> : null}
                   <div ref={customerAccessPopoverRef} className="relative shrink-0">
                     <button
                       type="button"
                       onClick={() => setCustomerAccessPopoverOpen((open) => !open)}
-                      className={`relative flex h-8 w-8 items-center justify-center rounded-lg border transition-colors ${
+                      className={`relative ${HEADER_ICON_BUTTON_CLASS} ${
                         customerAccessPopoverOpen
-                          ? 'border-blue-300 bg-blue-100 text-blue-700 ring-2 ring-blue-100 dark:border-blue-700 dark:bg-blue-900/40 dark:text-blue-200 dark:ring-blue-950'
-                          : 'border-transparent bg-blue-100 text-blue-600 hover:border-blue-200 hover:bg-blue-50 dark:bg-blue-900/30 dark:text-blue-300 dark:hover:border-blue-800 dark:hover:bg-blue-950/50'
+                          ? 'text-blue-700 dark:text-blue-300'
+                          : 'text-slate-500 hover:text-blue-600 dark:text-slate-300 dark:hover:text-blue-300'
                       }`}
                       title="Ver acesso e dados técnicos do cliente"
                       aria-label="Ver acesso e dados técnicos do cliente"
@@ -5105,10 +5108,11 @@ const AgentWorkspace = () => {
                     <button
                       type="button"
                       onClick={() => handlePickup(selectedChat)}
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-orange-500 px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wide text-white shadow-sm transition-colors hover:bg-orange-600"
+                      className={`${HEADER_ICON_BUTTON_CLASS} text-orange-500 hover:text-orange-600 dark:text-orange-300`}
+                      title="Puxar atendimento"
+                      aria-label="Puxar atendimento"
                     >
-                      <Play size={12} fill="currentColor" />
-                      {isMobileView ? 'Puxar' : 'Puxar atendimento'}
+                      <Play size={15} />
                     </button>
                   ) : (
                     <>
@@ -5116,7 +5120,9 @@ const AgentWorkspace = () => {
                         <button
                           type="button"
                           onClick={() => { setMobilePanelTab('quick'); setMobilePanelOpen(true); }}
-                          className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-600 transition-colors hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+                          className={`${HEADER_ICON_BUTTON_CLASS} text-slate-500 hover:text-slate-800 dark:text-slate-300 dark:hover:text-white`}
+                          title="Respostas rápidas"
+                          aria-label="Respostas rápidas"
                         >
                           <MessageSquareText size={15} />
                         </button>
@@ -5125,7 +5131,9 @@ const AgentWorkspace = () => {
                         <button
                           type="button"
                           onClick={() => { setMobilePanelTab('info'); setMobilePanelOpen(true); }}
-                          className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-600 transition-colors hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+                          className={`${HEADER_ICON_BUTTON_CLASS} text-slate-500 hover:text-slate-800 dark:text-slate-300 dark:hover:text-white`}
+                          title="Informações do cliente"
+                          aria-label="Informações do cliente"
                         >
                           <Info size={15} />
                         </button>
@@ -5135,15 +5143,14 @@ const AgentWorkspace = () => {
                           type="button"
                           onClick={openQuickIxcOsOperation}
                           disabled={!selectedHeaderIxc?.clientId || selectedValidIxcOrders.length === 0}
-                          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-2.5 text-[9px] font-bold text-blue-700 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400 disabled:opacity-60 dark:border-blue-900/50 dark:bg-blue-950/30 dark:text-blue-300 dark:hover:bg-blue-950/50 dark:disabled:border-slate-700 dark:disabled:bg-slate-800 dark:disabled:text-slate-500"
+                          className={`${HEADER_ICON_BUTTON_CLASS} text-blue-600 hover:text-blue-700 disabled:text-slate-400 dark:text-blue-300 dark:disabled:text-slate-600`}
                           title={!selectedHeaderIxc?.clientId
                             ? 'Busque os dados do IXC antes de finalizar uma OS'
                             : selectedValidIxcOrders.length
                               ? `${selectedValidIxcOrders.length} OS aberta de SUPORTE N1 disponível`
                               : 'Nenhuma OS aberta de SUPORTE INICIAL / SUPORTE N1'}
                         >
-                          <ClipboardList size={13} />
-                          <span className="hidden sm:inline">Finalizar OS</span>
+                          <ClipboardList size={15} />
                         </button>
                       ) : null}
                       {isGenesysChatClient(selectedChat) ? (
@@ -5151,7 +5158,7 @@ const AgentWorkspace = () => {
                           type="button"
                           onClick={handleReloadGenesysConversation}
                           disabled={conversationReloading}
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-blue-600 transition-colors hover:bg-blue-100 disabled:cursor-wait disabled:opacity-60 dark:border-blue-900/50 dark:bg-blue-900/20 dark:text-blue-300"
+                          className={`${HEADER_ICON_BUTTON_CLASS} text-slate-500 hover:text-blue-600 disabled:cursor-wait dark:text-slate-300 dark:hover:text-blue-300`}
                           title="Recarregar toda a conversa do Genesys"
                           aria-label="Recarregar toda a conversa do Genesys"
                         >
@@ -5163,12 +5170,14 @@ const AgentWorkspace = () => {
                           type="button"
                           onClick={handleRouterButton}
                           disabled={!routerIxcReady || !routerHasOnlineLogin || (routerProbe.chatId === selectedChat.id && routerProbe.status === 'testing')}
-                          className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                          className={`${HEADER_ICON_BUTTON_CLASS} ${
                             routerProbe.chatId === selectedChat.id && routerProbe.status === 'online'
-                              ? 'border-emerald-300 bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300'
+                              ? 'text-emerald-600 hover:text-emerald-700 dark:text-emerald-300'
                               : routerProbe.chatId === selectedChat.id && routerProbe.status === 'offline'
-                                ? 'border-red-300 bg-red-50 text-red-600 hover:bg-red-100 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300'
-                                : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'
+                                ? 'text-red-500 hover:text-red-600 dark:text-red-300'
+                                : routerProbe.chatId === selectedChat.id && routerProbe.status === 'testing'
+                                  ? 'text-amber-500 dark:text-amber-300'
+                                  : 'text-slate-500 hover:text-slate-800 dark:text-slate-300 dark:hover:text-white'
                           }`}
                           title={routerBlockedTitle || (routerProbe.chatId === selectedChat.id && routerProbe.status === 'online' ? `Abrir ${routerProbe.url}` : 'Testar acesso ao roteador')}
                           aria-label="Testar ou abrir roteador"
@@ -5181,10 +5190,10 @@ const AgentWorkspace = () => {
                           type="button"
                           onClick={handleBuscarIxc}
                           disabled={ixcSearching}
-                          className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border transition-colors disabled:cursor-wait disabled:opacity-60 ${
+                          className={`${HEADER_ICON_BUTTON_CLASS} disabled:cursor-wait ${
                             (selectedChat?.ixcData || chatVars?.ixc_dados)
-                              ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-300'
-                              : 'border-cyan-200 bg-cyan-50 text-cyan-700 hover:bg-cyan-100 dark:border-cyan-900/50 dark:bg-cyan-950/30 dark:text-cyan-300'
+                              ? 'text-emerald-600 hover:text-emerald-700 dark:text-emerald-300'
+                              : 'text-cyan-600 hover:text-cyan-700 dark:text-cyan-300'
                           }`}
                           title={(selectedChat?.ixcData || chatVars?.ixc_dados) ? 'Abrir dados e ordens de serviço do IXC' : 'Buscar cliente no IXC'}
                           aria-label={(selectedChat?.ixcData || chatVars?.ixc_dados) ? 'Abrir dados do IXC' : 'Buscar cliente no IXC'}
@@ -5212,7 +5221,7 @@ const AgentWorkspace = () => {
                         <button
                           type="button"
                           onClick={() => setIsAiPanelOpen(true)}
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-violet-200 bg-violet-50 text-violet-700 transition-colors hover:bg-violet-100 dark:border-violet-900/50 dark:bg-violet-950/30 dark:text-violet-300"
+                          className={`${HEADER_ICON_BUTTON_CLASS} text-violet-600 hover:text-violet-700 dark:text-violet-300`}
                           title="Abrir assistente IA"
                           aria-label="Abrir assistente IA"
                         >
@@ -5222,7 +5231,7 @@ const AgentWorkspace = () => {
                       <button
                         type="button"
                         onClick={openTransferModal}
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-blue-600 transition-colors hover:bg-blue-100 dark:border-blue-900/50 dark:bg-blue-900/20 dark:text-blue-300"
+                        className={`${HEADER_ICON_BUTTON_CLASS} text-blue-600 hover:text-blue-700 dark:text-blue-300`}
                         title="Transferir atendimento"
                         aria-label="Transferir atendimento"
                       >
@@ -5231,7 +5240,7 @@ const AgentWorkspace = () => {
                       <button
                         type="button"
                         onClick={handleClose}
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-600 transition-colors hover:bg-red-100 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-300"
+                        className={`${HEADER_ICON_BUTTON_CLASS} text-red-500 hover:text-red-600 dark:text-red-300`}
                         title="Encerrar atendimento"
                         aria-label="Encerrar atendimento"
                       >
@@ -5379,7 +5388,7 @@ const AgentWorkspace = () => {
                     <button
                       type="button"
                       onClick={() => setIsSidePanelCollapsed((prev) => !prev)}
-                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+                      className={`${HEADER_ICON_BUTTON_CLASS} text-slate-500 hover:text-slate-800 dark:text-slate-300 dark:hover:text-white`}
                       title={isSidePanelCollapsed ? 'Mostrar painel' : 'Ocultar painel'}
                       aria-label={isSidePanelCollapsed ? 'Mostrar painel' : 'Ocultar painel'}
                     >
