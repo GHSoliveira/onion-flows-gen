@@ -4035,7 +4035,7 @@ const AgentWorkspace = () => {
                 accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,video/quicktime,audio/mpeg,audio/ogg,audio/wav,audio/webm,application/pdf"
                 onChange={handleIxcOsFileSelected}
               />
-              <div tabIndex={0} className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-dashed border-blue-300 bg-blue-50/60 px-3 py-3 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-100 dark:border-blue-800 dark:bg-blue-950/20 dark:focus:ring-blue-950">
+              <div tabIndex={0} autoFocus aria-label="Cole uma imagem ou escolha um arquivo para anexar à OS" className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-dashed border-blue-300 bg-blue-50/60 px-3 py-3 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-100 dark:border-blue-800 dark:bg-blue-950/20 dark:focus:ring-blue-950">
                 <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-blue-600 shadow-sm dark:bg-slate-800 dark:text-blue-300"><ImageIcon size={18} /></div>
                 <div className="min-w-[180px] flex-1">
                   <div className="text-[10px] font-bold text-slate-700 dark:text-slate-200">Cole uma imagem com Ctrl+V</div>
