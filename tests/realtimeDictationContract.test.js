@@ -34,6 +34,11 @@ test('captura mostra previa na caixa mas bloqueia envio ate a revisao final', as
   assert.match(component, /createMediaStreamSource/);
   assert.match(component, /createScriptProcessor/);
   assert.match(component, /encodePcm16Wav/);
+  assert.match(component, /calculateRms/);
+  assert.match(component, /fullPcmChunksRef/);
+  assert.match(component, /Nível do microfone/);
+  assert.match(component, /sem sinal/);
+  assert.match(component, /não entrou som/);
   assert.match(component, /mergeTranscript/);
   assert.match(component, /transcribeDictationPartial/);
   assert.match(component, /onPartial\?\.\(liveTextRef\.current\)/);

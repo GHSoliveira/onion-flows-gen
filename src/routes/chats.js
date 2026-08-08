@@ -1238,6 +1238,7 @@ router.post('/:id/media', authenticate, authorize(CHAT_OPERATIONAL_ROLES), requi
 router.post('/:id/dictation', authenticate, authorize(CHAT_OPERATIONAL_ROLES), requireTenant, localTranscriptionLimiter, async (req, res) => {
   let handle = null;
   let filePath = '';
+  const startedAt = Date.now();
   try {
     res.setHeader('Cache-Control', 'no-store');
     const chatId = asIdentifier(req.params.id, { maxLength: 200 });
@@ -1323,6 +1324,12 @@ router.post('/:id/dictation', authenticate, authorize(CHAT_OPERATIONAL_ROLES), r
       throw error;
     }
     const text = String(result.text || '').trim().slice(0, 10_000);
+    console.info('[TRANSCRICAO] Ditado finalizado', {
+      durationSeconds: Number(result.duration || declaredDuration || 0).toFixed(1),
+      elapsedMs: Date.now() - startedAt,
+      model: result.model,
+      hasText: Boolean(text),
+    });
     return res.json({
       ok: true,
       transcription: {
@@ -1335,6 +1342,10 @@ router.post('/:id/dictation', authenticate, authorize(CHAT_OPERATIONAL_ROLES), r
     });
   } catch (error) {
     const code = String(error?.code || 'LOCAL_DICTATION_FAILED');
+    console.warn('[TRANSCRICAO] Ditado falhou', {
+      code,
+      elapsedMs: Date.now() - startedAt,
+    });
     const status = Number(error?.status)
       || (code === 'LOCAL_TRANSCRIPTION_UNAVAILABLE' ? 503
         : code === 'LOCAL_TRANSCRIPTION_QUEUE_FULL' ? 429

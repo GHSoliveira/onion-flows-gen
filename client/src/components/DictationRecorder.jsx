@@ -9,6 +9,8 @@ const PARTIAL_MIN_SECONDS = 0.9;
 const PARTIAL_MAX_SECONDS = 7;
 const PARTIAL_OVERLAP_SECONDS = 0.3;
 const TARGET_SAMPLE_RATE = 16_000;
+const MIN_SIGNAL_RMS = 0.0015;
+const MIN_SIGNAL_PEAK = 0.006;
 const MIME_CANDIDATES = [
   'audio/webm;codecs=opus',
   'audio/ogg;codecs=opus',
@@ -55,6 +57,15 @@ const flattenSamples = (chunks, totalLength) => {
     offset += chunk.length;
   }
   return output;
+};
+
+const calculateRms = (samples) => {
+  if (!samples?.length) return 0;
+  let sumSquares = 0;
+  for (let index = 0; index < samples.length; index += 1) {
+    sumSquares += samples[index] * samples[index];
+  }
+  return Math.sqrt(sumSquares / samples.length);
 };
 
 const downsampleTo16Khz = (input, inputRate) => {
@@ -107,6 +118,9 @@ const DictationRecorder = ({
 }) => {
   const [status, setStatus] = useState('idle');
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [inputLevel, setInputLevel] = useState(0);
+  const [signalDetected, setSignalDetected] = useState(false);
+  const [captureNotice, setCaptureNotice] = useState('');
   const recorderRef = useRef(null);
   const streamRef = useRef(null);
   const chunksRef = useRef([]);
@@ -125,7 +139,13 @@ const DictationRecorder = ({
   const silentGainRef = useRef(null);
   const pcmChunksRef = useRef([]);
   const pcmLengthRef = useRef(0);
+  const fullPcmChunksRef = useRef([]);
+  const fullPcmLengthRef = useRef(0);
   const sampleRateRef = useRef(48_000);
+  const signalSumSquaresRef = useRef(0);
+  const signalSampleCountRef = useRef(0);
+  const signalPeakRef = useRef(0);
+  const lastLevelUpdateRef = useRef(0);
   const partialInFlightRef = useRef(false);
   const partialSequenceRef = useRef(0);
   const partialSessionRef = useRef(0);
@@ -159,6 +179,8 @@ const DictationRecorder = ({
     if (context && context.state !== 'closed') void context.close().catch(() => {});
     pcmChunksRef.current = [];
     pcmLengthRef.current = 0;
+    fullPcmChunksRef.current = [];
+    fullPcmLengthRef.current = 0;
   };
 
   const releaseRecorder = () => {
@@ -192,6 +214,7 @@ const DictationRecorder = ({
     ) return;
     const samples = consumePartialSamples();
     if (!samples) return;
+    if (calculateRms(samples) < MIN_SIGNAL_RMS) return;
     const downsampled = downsampleTo16Khz(samples, sampleRateRef.current);
     const durationSeconds = downsampled.length / TARGET_SAMPLE_RATE;
     const audio = encodePcm16Wav(downsampled);
@@ -205,16 +228,23 @@ const DictationRecorder = ({
         audio,
         durationSeconds,
       });
+      if (!result?.ok) {
+        const ignored = result?.code === 'DICTATION_BUSY' || result?.code === 'DICTATION_THROTTLED';
+        if (!ignored && mountedRef.current) {
+          setCaptureNotice('Prévia indisponível; a revisão final continua.');
+        }
+        return;
+      }
       if (
-        !result?.ok
-        || statusRef.current !== 'recording'
+        statusRef.current !== 'recording'
         || sessionId !== partialSessionRef.current
         || Number(result.sequence) !== sequence
       ) return;
+      if (mountedRef.current) setCaptureNotice('Ouvindo…');
       liveTextRef.current = mergeTranscript(liveTextRef.current, result.text);
       onPartial?.(liveTextRef.current);
     } catch {
-      // A prévia é oportunista; a passagem final continua disponível via HTTP.
+      if (mountedRef.current) setCaptureNotice('Prévia indisponível; a revisão final continua.');
     } finally {
       partialInFlightRef.current = false;
     }
@@ -263,6 +293,9 @@ const DictationRecorder = ({
     chunksRef.current = [];
     liveTextRef.current = '';
     onPartial?.('');
+    setInputLevel(0);
+    setSignalDetected(false);
+    setCaptureNotice('');
     finishRecording();
     updateStatus('idle');
     setElapsedSeconds(0);
@@ -327,6 +360,26 @@ const DictationRecorder = ({
       copy.set(input);
       pcmChunksRef.current.push(copy);
       pcmLengthRef.current += copy.length;
+      fullPcmChunksRef.current.push(copy);
+      fullPcmLengthRef.current += copy.length;
+      let chunkSumSquares = 0;
+      let chunkPeak = 0;
+      for (let index = 0; index < copy.length; index += 1) {
+        const sample = copy[index];
+        const absolute = Math.abs(sample);
+        chunkSumSquares += sample * sample;
+        if (absolute > chunkPeak) chunkPeak = absolute;
+      }
+      signalSumSquaresRef.current += chunkSumSquares;
+      signalSampleCountRef.current += copy.length;
+      signalPeakRef.current = Math.max(signalPeakRef.current, chunkPeak);
+      const now = performance.now();
+      if (now - lastLevelUpdateRef.current >= 80 && mountedRef.current) {
+        const rms = Math.sqrt(chunkSumSquares / Math.max(1, copy.length));
+        setInputLevel(Math.min(1, rms * 22));
+        if (rms >= MIN_SIGNAL_RMS || chunkPeak >= MIN_SIGNAL_PEAK) setSignalDetected(true);
+        lastLevelUpdateRef.current = now;
+      }
       const maximumBufferedSamples = Math.floor(context.sampleRate * PARTIAL_MAX_SECONDS);
       while (pcmLengthRef.current > maximumBufferedSamples && pcmChunksRef.current.length > 1) {
         const removed = pcmChunksRef.current.shift();
@@ -375,11 +428,20 @@ const DictationRecorder = ({
       chunksRef.current = [];
       pcmChunksRef.current = [];
       pcmLengthRef.current = 0;
+      fullPcmChunksRef.current = [];
+      fullPcmLengthRef.current = 0;
+      signalSumSquaresRef.current = 0;
+      signalSampleCountRef.current = 0;
+      signalPeakRef.current = 0;
+      lastLevelUpdateRef.current = 0;
       partialSequenceRef.current = 0;
       liveTextRef.current = '';
       canceledRef.current = false;
       startedAtRef.current = Date.now();
       onPartial?.('');
+      setInputLevel(0);
+      setSignalDetected(false);
+      setCaptureNotice('Ouvindo…');
 
       recorder.ondataavailable = (event) => {
         if (!canceledRef.current && event.data?.size > 0) chunksRef.current.push(event.data);
@@ -399,10 +461,33 @@ const DictationRecorder = ({
         const durationSeconds = Math.max(1, (Date.now() - startedAtRef.current) / 1000);
         const parts = canceledRef.current ? [] : chunksRef.current;
         const recordedMime = recorder.mimeType || mimeType || 'audio/webm';
+        const fullPcm = fullPcmLengthRef.current > 0
+          ? flattenSamples(fullPcmChunksRef.current, fullPcmLengthRef.current)
+          : null;
+        const averageRms = signalSampleCountRef.current > 0
+          ? Math.sqrt(signalSumSquaresRef.current / signalSampleCountRef.current)
+          : 0;
+        const peak = signalPeakRef.current;
         chunksRef.current = [];
         releaseRecorder();
-        if (canceledRef.current || !parts.length || !mountedRef.current) return;
-        const blob = new Blob(parts, { type: recordedMime });
+        if (canceledRef.current || (!fullPcm?.length && !parts.length) || !mountedRef.current) return;
+        setInputLevel(0);
+        setSignalDetected(false);
+        setCaptureNotice('');
+        const hasMeasuredSignal = Boolean(fullPcm?.length)
+          && (averageRms >= MIN_SIGNAL_RMS || peak >= MIN_SIGNAL_PEAK);
+        if (fullPcm?.length && !hasMeasuredSignal && !liveTextRef.current) {
+          onPartial?.('');
+          updateStatus('idle');
+          setElapsedSeconds(0);
+          toast.error('O microfone foi aberto, mas não entrou som. Confira o dispositivo de entrada do Windows/Chrome.');
+          return;
+        }
+        const blob = fullPcm?.length
+          ? new Blob([
+            encodePcm16Wav(downsampleTo16Khz(fullPcm, sampleRateRef.current)),
+          ], { type: 'audio/wav' })
+          : new Blob(parts, { type: recordedMime });
         if (blob.size < 256) {
           onPartial?.('');
           updateStatus('idle');
@@ -415,6 +500,9 @@ const DictationRecorder = ({
       updateStatus('recording');
       recorder.start(250);
       const realtimeReady = await startRealtimeCapture(stream, sessionId);
+      if (!realtimeReady && mountedRef.current) {
+        setCaptureNotice('Sem prévia ao vivo; gravando para revisão final.');
+      }
       if (realtimeReady && socketService.isConnected()) {
         void socketService.warmDictation(chatId).catch(() => {});
       }
@@ -430,6 +518,9 @@ const DictationRecorder = ({
       onPartial?.('');
       releaseRecorder();
       updateStatus('idle');
+      setInputLevel(0);
+      setSignalDetected(false);
+      setCaptureNotice('');
       const denied = error?.name === 'NotAllowedError' || error?.name === 'SecurityError';
       toast.error(denied
         ? 'Permita o acesso ao microfone para usar o ditado.'
@@ -438,11 +529,16 @@ const DictationRecorder = ({
   };
 
   if (status === 'recording') {
+    const meterWidth = `${Math.max(4, Math.round(inputLevel * 100))}%`;
     return (
-      <div className="flex h-9 shrink-0 items-center gap-1 rounded-xl border border-red-200 bg-red-50 px-1.5 text-red-600 shadow-sm dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">
+      <div title={captureNotice} className="flex h-9 shrink-0 items-center gap-1 rounded-xl border border-red-200 bg-red-50 px-1.5 text-red-600 shadow-sm dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">
         <button type="button" onClick={finishRecording} title="Parar e revisar" aria-label="Parar e revisar" className="flex h-7 items-center gap-1.5 rounded-lg px-1.5 text-[11px] font-bold hover:bg-red-100 dark:hover:bg-red-900/30">
           <span className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
           {formatSeconds(elapsedSeconds)}
+          <span className="h-1.5 w-7 overflow-hidden rounded-full bg-red-200 dark:bg-red-900/60" aria-label="Nível do microfone">
+            <span className="block h-full rounded-full bg-red-500 transition-[width] duration-75" style={{ width: meterWidth }} />
+          </span>
+          {elapsedSeconds >= 1.5 && !signalDetected ? <span className="text-[9px] font-semibold">sem sinal</span> : null}
           <Square size={10} fill="currentColor" />
         </button>
         <button type="button" onClick={cancelRecording} title="Cancelar gravação" aria-label="Cancelar gravação" className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-red-100 dark:hover:bg-red-900/30"><X size={13} /></button>

@@ -30,6 +30,8 @@ test('gravador insere o resultado somente no rascunho e para ao trocar de card',
 
   assert.match(component, /navigator\.mediaDevices\.getUserMedia/);
   assert.match(component, /new MediaRecorder/);
+  assert.match(component, /new Blob\(\[/);
+  assert.match(component, /type: 'audio\/wav'/);
   assert.match(component, /MAX_RECORDING_SECONDS = 120/);
   assert.match(component, /onTranscribed\?\.\(text\)/);
   assert.match(component, /requestControllerRef\.current\?\.abort\(\)/);
