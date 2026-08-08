@@ -179,6 +179,14 @@ const activeIxcLogins = (details) => (
     : []
 );
 const PRE_OS_TASK_CODES = new Set(['4631', '4633', '4635', '4637', '4641']);
+const IXC_OS_MAX_ATTACHMENTS = 12;
+const IXC_OS_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+const IXC_OS_ALLOWED_ATTACHMENT_MIMES = new Set([
+  'image/jpeg', 'image/png', 'image/webp', 'image/gif',
+  'video/mp4', 'video/webm', 'video/quicktime',
+  'audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/webm',
+  'application/pdf',
+]);
 const normalizeIxcOsLabel = (value) => String(value || '')
   .normalize('NFD')
   .replace(/[\u0300-\u036f]/g, '')
@@ -629,7 +637,7 @@ const AgentWorkspace = () => {
     open: false, order: null, diagnosisId: '', diagnosisQuery: '',
     nextTaskCode: '', nextTaskQuery: '', sectorCode: '', visitDate: defaultIxcVisitDate(),
     visitPeriod: 'MANHA', periodNote: '', description: '', reference: '',
-    address: '', phone: '', selectedMedia: {}, submitting: false,
+    address: '', phone: '', selectedMedia: {}, attachmentUploading: false, submitting: false,
     chatId: '', convId: '', clientId: '', requestId: '',
   });
   const [routerProbe, setRouterProbe] = useState({ chatId: '', ip: '', status: 'idle', url: '', openPorts: [], pickerOpen: false });
@@ -700,6 +708,7 @@ const AgentWorkspace = () => {
   const selectedChatRef = useRef(null);
   const customerAccessPopoverRef = useRef(null);
   const mediaInputRef = useRef(null);
+  const ixcOsFileInputRef = useRef(null);
   const unreadByChatIdRef = useRef({});
   const knownChatIdsRef = useRef(new Set());
   const unreadBootstrappedRef = useRef(false);
@@ -3731,6 +3740,7 @@ const AgentWorkspace = () => {
       address: order?.address || fallbackAddress,
       phone: order?.phone || details?.phone || '',
       selectedMedia: {},
+      attachmentUploading: false,
       submitting: false,
       chatId: String(selectedChat?.id || ''),
       convId: String(selectedChat?.genesysConvId || selectedChat?.externalConvId || ''),
@@ -3762,11 +3772,108 @@ const AgentWorkspace = () => {
     });
   };
 
+  const addIxcOsExternalFiles = async (incomingFiles) => {
+    const operationRequestId = String(ixcOsOperation.requestId || '');
+    if (!ixcOsOperation.open || ixcOsOperation.attachmentUploading || !operationRequestId) return;
+
+    const availableSlots = Math.max(
+      0,
+      IXC_OS_MAX_ATTACHMENTS - Object.keys(ixcOsOperation.selectedMedia || {}).length
+    );
+    if (!availableSlots) {
+      toast.error(`A OS aceita no máximo ${IXC_OS_MAX_ATTACHMENTS} anexos`);
+      return;
+    }
+
+    const files = Array.from(incomingFiles || []).filter(Boolean).slice(0, availableSlots);
+    if (!files.length) return;
+    setIxcOsOperation((previous) => ({ ...previous, attachmentUploading: true }));
+    let uploadedCount = 0;
+    try {
+      for (const file of files) {
+        const mimeType = String(file.type || '').trim().toLowerCase();
+        if (!IXC_OS_ALLOWED_ATTACHMENT_MIMES.has(mimeType)) {
+          toast.error(`${file.name || 'Arquivo'}: tipo não permitido`);
+          continue;
+        }
+        if (!file.size || file.size > IXC_OS_MAX_ATTACHMENT_BYTES) {
+          toast.error(`${file.name || 'Arquivo'}: o limite é 25 MB`);
+          continue;
+        }
+        try {
+          const asset = await uploadMediaAsset(file);
+          const assetId = String(asset?.id || '').trim();
+          if (!assetId) throw new Error('Servidor não retornou o identificador do anexo');
+          const kind = mimeType.startsWith('image/')
+            ? 'image'
+            : mimeType.startsWith('video/')
+              ? 'video'
+              : mimeType.startsWith('audio/')
+                ? 'audio'
+                : 'document';
+          setIxcOsOperation((previous) => {
+            if (!previous.open || String(previous.requestId || '') !== operationRequestId) return previous;
+            const key = `asset:${assetId}`;
+            return {
+              ...previous,
+              selectedMedia: {
+                ...(previous.selectedMedia || {}),
+                [key]: {
+                  assetId,
+                  source: 'external',
+                  fileName: asset.originalName || file.name || 'Anexo',
+                  description: asset.originalName || file.name || 'Anexo',
+                  mimeType: asset.mimeType || mimeType,
+                  type: kind,
+                  size: Number(asset.size || file.size || 0),
+                  previewUrl: resolveMediaUrl(asset.url),
+                },
+              },
+            };
+          });
+          uploadedCount += 1;
+        } catch (error) {
+          toast.error(`${file.name || 'Arquivo'}: ${error?.message || 'falha no upload'}`);
+        }
+      }
+      if (uploadedCount) toast.success(`${uploadedCount} anexo${uploadedCount === 1 ? '' : 's'} adicionado${uploadedCount === 1 ? '' : 's'} à OS`);
+    } finally {
+      setIxcOsOperation((previous) => (
+        String(previous.requestId || '') === operationRequestId
+          ? { ...previous, attachmentUploading: false }
+          : previous
+      ));
+    }
+  };
+
+  const handleIxcOsFileSelected = (event) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    void addIxcOsExternalFiles(files);
+  };
+
+  const handleIxcOsPaste = (event) => {
+    const clipboardFiles = Array.from(event.clipboardData?.files || []);
+    const itemFiles = Array.from(event.clipboardData?.items || [])
+      .filter((item) => item.kind === 'file')
+      .map((item) => item.getAsFile())
+      .filter(Boolean);
+    const images = (clipboardFiles.length ? clipboardFiles : itemFiles)
+      .filter((file) => String(file?.type || '').toLowerCase().startsWith('image/'));
+    if (!images.length) return;
+    event.preventDefault();
+    void addIxcOsExternalFiles(images);
+  };
+
   const submitIxcOsOperation = async () => {
     const details = selectedChat?.ixcData || chatVars?.ixc_dados;
     const operation = ixcOsOperation;
     const finalizeOnly = PRE_OS_TASK_CODES.has(operation.nextTaskCode);
     if (!selectedChat?.id || !operation.order?.osId) return;
+    if (operation.attachmentUploading) {
+      toast.error('Aguarde o upload dos anexos terminar');
+      return;
+    }
     const currentConvId = String(selectedChat?.genesysConvId || selectedChat?.externalConvId || '');
     if (
       String(selectedChat.id) !== String(operation.chatId)
@@ -3828,6 +3935,7 @@ const AgentWorkspace = () => {
           mensagem,
           attachments: Object.values(operation.selectedMedia || {}).map((media) => ({
             messageId: media.messageId,
+            assetId: media.assetId,
             description: String(media.description || media.fileName || '').trim(),
           })),
         }),
@@ -3847,6 +3955,8 @@ const AgentWorkspace = () => {
     const details = selectedChat?.ixcData || chatVars?.ixc_dados || {};
     const candidates = validOpenSupportN1Orders(details);
     const finalizeOnly = PRE_OS_TASK_CODES.has(ixcOsOperation.nextTaskCode);
+    const externalSelectedMedia = Object.entries(ixcOsOperation.selectedMedia || {})
+      .filter(([, media]) => Boolean(media?.assetId));
     const ready = Boolean(
       ixcOsOperation.diagnosisId
       && ixcOsOperation.nextTaskCode
@@ -3867,19 +3977,21 @@ const AgentWorkspace = () => {
       }));
     };
     const close = () => {
-      if (!ixcOsOperation.submitting) setIxcOsOperation((previous) => ({ ...previous, open: false }));
+      if (!ixcOsOperation.submitting && !ixcOsOperation.attachmentUploading) {
+        setIxcOsOperation((previous) => ({ ...previous, open: false }));
+      }
     };
 
     return (
       <div className="pointer-events-none fixed inset-x-3 bottom-3 top-16 z-[120] flex items-end justify-center sm:inset-auto sm:bottom-5 sm:right-5 sm:top-20 sm:w-[min(700px,calc(100vw-40px))] sm:items-stretch">
-        <div className="ui-modal-surface pointer-events-auto flex max-h-full w-full flex-col overflow-hidden rounded-[22px] border border-slate-200 bg-white shadow-[0_24px_80px_rgba(15,23,42,0.32)] ring-1 ring-black/5 dark:border-slate-700 dark:bg-slate-900 dark:ring-white/5">
+        <div onPaste={handleIxcOsPaste} className="ui-modal-surface pointer-events-auto flex max-h-full w-full flex-col overflow-hidden rounded-[22px] border border-slate-200 bg-white shadow-[0_24px_80px_rgba(15,23,42,0.32)] ring-1 ring-black/5 dark:border-slate-700 dark:bg-slate-900 dark:ring-white/5">
           <header className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-100 px-5 py-4 dark:border-slate-800">
             <div className="min-w-0">
               <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.16em] text-blue-600 dark:text-blue-300"><ClipboardList size={14} />Operação IXC</div>
               <h3 className="mt-1 truncate text-lg font-bold text-slate-950 dark:text-white">Finalizar OS de {details.fullName || selectedChatName}</h3>
               <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">Somente OS aberta de Suporte Inicial no setor Suporte N1.</p>
             </div>
-            <button type="button" disabled={ixcOsOperation.submitting} onClick={close} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-500 transition-colors hover:bg-slate-200 disabled:opacity-40 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"><XIcon size={16} /></button>
+            <button type="button" disabled={ixcOsOperation.submitting || ixcOsOperation.attachmentUploading} onClick={close} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-500 transition-colors hover:bg-slate-200 disabled:opacity-40 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"><XIcon size={16} /></button>
           </header>
 
           <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 custom-scrollbar">
@@ -3908,13 +4020,58 @@ const AgentWorkspace = () => {
               <label className="text-[9px] font-bold uppercase tracking-wide text-slate-500 sm:col-span-2">Descrição do problema<textarea rows={3} maxLength={2000} value={ixcOsOperation.description} onChange={(event) => setIxcOsOperation((previous) => ({ ...previous, description: event.target.value }))} placeholder="Descreva o problema com pelo menos 10 caracteres" className="mt-1 w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs leading-5 text-slate-800 outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></label>
             </div>
 
-            <details className="mt-4 border-t border-slate-100 pt-3 dark:border-slate-800">
-              <summary className="cursor-pointer text-[10px] font-bold uppercase tracking-wide text-slate-500">Contato, endereço e anexos</summary>
+            <details open className="mt-4 border-t border-slate-100 pt-3 dark:border-slate-800">
+              <summary className="cursor-pointer text-[10px] font-bold uppercase tracking-wide text-slate-500">Contato, endereço e anexos ({Object.keys(ixcOsOperation.selectedMedia || {}).length})</summary>
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
                 <label className="text-[9px] font-bold uppercase text-slate-500 sm:col-span-2">Endereço<input value={ixcOsOperation.address} onChange={(event) => setIxcOsOperation((previous) => ({ ...previous, address: event.target.value }))} className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></label>
                 <label className="text-[9px] font-bold uppercase text-slate-500">Telefone<input value={ixcOsOperation.phone} onChange={(event) => setIxcOsOperation((previous) => ({ ...previous, phone: event.target.value }))} className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></label>
                 <label className="text-[9px] font-bold uppercase text-slate-500">Referência<input value={ixcOsOperation.reference} onChange={(event) => setIxcOsOperation((previous) => ({ ...previous, reference: event.target.value }))} className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></label>
               </div>
+              <input
+                ref={ixcOsFileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,video/quicktime,audio/mpeg,audio/ogg,audio/wav,audio/webm,application/pdf"
+                onChange={handleIxcOsFileSelected}
+              />
+              <div tabIndex={0} className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-dashed border-blue-300 bg-blue-50/60 px-3 py-3 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-100 dark:border-blue-800 dark:bg-blue-950/20 dark:focus:ring-blue-950">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-blue-600 shadow-sm dark:bg-slate-800 dark:text-blue-300"><ImageIcon size={18} /></div>
+                <div className="min-w-[180px] flex-1">
+                  <div className="text-[10px] font-bold text-slate-700 dark:text-slate-200">Cole uma imagem com Ctrl+V</div>
+                  <div className="mt-0.5 text-[9px] text-slate-400">Ou escolha imagem, áudio, vídeo ou PDF do computador · até 25 MB</div>
+                </div>
+                <button type="button" disabled={ixcOsOperation.attachmentUploading || ixcOsOperation.submitting || Object.keys(ixcOsOperation.selectedMedia || {}).length >= IXC_OS_MAX_ATTACHMENTS} onClick={() => ixcOsFileInputRef.current?.click()} className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-white px-3 py-2 text-[10px] font-bold text-blue-700 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-blue-800 dark:bg-slate-900 dark:text-blue-300 dark:hover:bg-blue-950/40">
+                  {ixcOsOperation.attachmentUploading ? <Loader2 size={13} className="animate-spin" /> : <Paperclip size={13} />}
+                  {ixcOsOperation.attachmentUploading ? 'Enviando...' : 'Arquivo do PC'}
+                </button>
+              </div>
+              {externalSelectedMedia.length ? (
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {externalSelectedMedia.map(([key, media]) => {
+                    const previewUrl = media.previewUrl || '';
+                    return (
+                      <div key={key} className="flex items-center gap-2 rounded-xl border border-blue-300 bg-blue-50 p-2 text-[10px] text-blue-800 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-200">
+                        <a href={previewUrl || undefined} target="_blank" rel="noreferrer" title="Abrir preview" className="relative flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white text-slate-500 ring-1 ring-black/5 dark:bg-slate-800 dark:text-slate-300">
+                          {media.type === 'image' && previewUrl ? <img src={previewUrl} alt={media.fileName || 'Imagem colada'} className="h-full w-full object-cover" /> : null}
+                          {media.type === 'video' && previewUrl ? <video src={previewUrl} muted preload="metadata" className="pointer-events-none h-full w-full object-cover" /> : null}
+                          {media.type === 'audio' ? <AudioLines size={20} /> : null}
+                          {!['image', 'video', 'audio'].includes(media.type) ? <FileText size={20} /> : null}
+                        </a>
+                        <div className="min-w-0 flex-1">
+                          <span className="block truncate font-semibold text-slate-700 dark:text-slate-200">{media.fileName || 'Anexo externo'}</span>
+                          <span className="mt-0.5 block text-[8px] uppercase tracking-wide text-slate-400">arquivo externo · selecionado</span>
+                        </div>
+                        <button type="button" disabled={ixcOsOperation.attachmentUploading || ixcOsOperation.submitting} title="Remover anexo" onClick={() => setIxcOsOperation((previous) => {
+                          const next = { ...(previous.selectedMedia || {}) };
+                          delete next[key];
+                          return { ...previous, selectedMedia: next };
+                        })} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-500 disabled:opacity-40 dark:hover:bg-red-950/30"><XIcon size={13} /></button>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
               {chatMediaItems.some((media) => media.messageId) ? (
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   {chatMediaItems.filter((media) => media.messageId).map((media) => {
@@ -3931,6 +4088,7 @@ const AgentWorkspace = () => {
                           className="h-4 w-4 shrink-0"
                           aria-label={`Selecionar ${media.fileName || media.type || 'anexo'}`}
                           checked={Boolean(selected)}
+                          disabled={!selected && Object.keys(ixcOsOperation.selectedMedia || {}).length >= IXC_OS_MAX_ATTACHMENTS}
                           onChange={(event) => setIxcOsOperation((previous) => {
                             const next = { ...(previous.selectedMedia || {}) };
                             if (event.target.checked) next[media.messageId] = { messageId: media.messageId, fileName: media.fileName || 'Anexo', description: media.fileName || '' };
@@ -3958,7 +4116,7 @@ const AgentWorkspace = () => {
 
           <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-slate-100 bg-slate-50/80 px-5 py-3 dark:border-slate-800 dark:bg-slate-950/40">
             <div className="hidden text-[10px] leading-4 text-slate-400 sm:block">A extensão revalida cliente, status, assunto e setor antes de alterar o IXC.</div>
-            <div className="ml-auto flex gap-2"><button type="button" disabled={ixcOsOperation.submitting} onClick={close} className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">Cancelar</button><button type="button" disabled={ixcOsOperation.submitting || !ready || !details.ixcOperator?.configured} onClick={submitIxcOsOperation} className="inline-flex min-w-40 items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-45">{ixcOsOperation.submitting ? <Loader2 size={14} className="animate-spin" /> : <ClipboardList size={14} />}{ixcOsOperation.submitting ? 'Enviando...' : finalizeOnly ? 'Finalizar OS' : 'Finalizar e encaminhar'}</button></div>
+            <div className="ml-auto flex gap-2"><button type="button" disabled={ixcOsOperation.submitting || ixcOsOperation.attachmentUploading} onClick={close} className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">Cancelar</button><button type="button" disabled={ixcOsOperation.submitting || ixcOsOperation.attachmentUploading || !ready || !details.ixcOperator?.configured} onClick={submitIxcOsOperation} className="inline-flex min-w-40 items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-45">{ixcOsOperation.submitting || ixcOsOperation.attachmentUploading ? <Loader2 size={14} className="animate-spin" /> : <ClipboardList size={14} />}{ixcOsOperation.attachmentUploading ? 'Anexando...' : ixcOsOperation.submitting ? 'Enviando...' : finalizeOnly ? 'Finalizar OS' : 'Finalizar e encaminhar'}</button></div>
           </footer>
         </div>
       </div>

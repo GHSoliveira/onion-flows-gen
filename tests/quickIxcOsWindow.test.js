@@ -23,3 +23,20 @@ test('anexos da OS rapida exibem miniatura e abrem o visualizador completo', asy
   assert.match(workspace, /media\.type === 'video' \? <video src=\{previewUrl\}/);
   assert.match(workspace, /abrir preview/);
 });
+
+test('janela de OS rapida aceita imagem colada e arquivo externo com upload seguro', async () => {
+  const workspace = await load('../client/src/pages/AgentWorkspace.jsx');
+  const routes = await load('../src/routes/chats.js');
+
+  assert.match(workspace, /onPaste=\{handleIxcOsPaste\}/);
+  assert.match(workspace, /Cole uma imagem com Ctrl\+V/);
+  assert.match(workspace, /ref=\{ixcOsFileInputRef\}/);
+  assert.match(workspace, /await uploadMediaAsset\(file\)/);
+  assert.match(workspace, /assetId:\s*media\.assetId/);
+  assert.match(workspace, /attachmentUploading/);
+
+  assert.match(routes, /mediaAssets\.findOne\(\{\s*id:\s*assetId,\s*tenantId:\s*chat\.tenantId,\s*createdBy:\s*req\.user\?\.id/s);
+  assert.match(routes, /pathname\.startsWith\(tenantUploadPrefix\)/);
+  assert.match(routes, /messageId:\s*trustedId/);
+  assert.doesNotMatch(routes, /rawUrl\s*=\s*String\(requested\?\.url/);
+});

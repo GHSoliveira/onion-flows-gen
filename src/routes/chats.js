@@ -1361,22 +1361,51 @@ router.post('/:id/ixc-os', authenticate, authorize(CHAT_OPERATIONAL_ROLES), requ
     const requestedAttachments = Array.isArray(req.body?.attachments) ? req.body.attachments.slice(0, 12) : [];
     const attachments = [];
     if (requestedAttachments.length) {
-      const hydrated = await hydrateChatWithMessages(chat, { limit: 2000 });
+      const needsConversationMessages = requestedAttachments.some((item) => String(item?.messageId || '').trim());
+      const hydrated = needsConversationMessages
+        ? await hydrateChatWithMessages(chat, { limit: 2000 })
+        : chat;
       const messagesById = new Map(
         (Array.isArray(hydrated?.messages) ? hydrated.messages : [])
           .map((message) => [String(message?.id || message?.messageId || ''), message])
           .filter(([messageId]) => Boolean(messageId))
       );
-      const seenMessageIds = new Set();
+      if (!adapter.db) await adapter.init();
+      const mediaAssets = adapter.db.collection('mediaAssets');
+      const seenAttachments = new Set();
       for (const requested of requestedAttachments) {
         const messageId = String(requested?.messageId || '').trim().slice(0, 160);
-        if (!messageId || seenMessageIds.has(messageId)) continue;
-        const message = messagesById.get(messageId);
-        if (!message) return res.status(400).json({ error: 'Um dos anexos não pertence a esta conversa.' });
-        const media = message.media && typeof message.media === 'object'
-          ? message.media
-          : (message.attachment && typeof message.attachment === 'object' ? message.attachment : {});
-        const rawUrl = String(media.url || media.mediaUrl || message.mediaUrl || message.attachmentUrl || '').trim();
+        const assetId = String(requested?.assetId || '').trim().slice(0, 160);
+        const attachmentKey = assetId ? `asset:${assetId}` : `message:${messageId}`;
+        if ((!messageId && !assetId) || seenAttachments.has(attachmentKey)) continue;
+
+        let rawUrl = '';
+        let originalName = '';
+        let mimeType = '';
+        let trustedId = messageId;
+        if (assetId) {
+          const asset = await mediaAssets.findOne({
+            id: assetId,
+            tenantId: chat.tenantId,
+            createdBy: req.user?.id || null,
+          });
+          if (!asset) {
+            return res.status(400).json({ error: 'Um dos arquivos externos não pertence ao agente ou tenant atual.' });
+          }
+          rawUrl = String(asset.url || '').trim();
+          originalName = String(asset.originalName || asset.fileName || 'anexo');
+          mimeType = String(asset.mimeType || 'application/octet-stream');
+          trustedId = `asset:${assetId}`;
+        } else {
+          const message = messagesById.get(messageId);
+          if (!message) return res.status(400).json({ error: 'Um dos anexos não pertence a esta conversa.' });
+          const media = message.media && typeof message.media === 'object'
+            ? message.media
+            : (message.attachment && typeof message.attachment === 'object' ? message.attachment : {});
+          rawUrl = String(media.url || media.mediaUrl || message.mediaUrl || message.attachmentUrl || '').trim();
+          originalName = String(media.fileName || media.filename || message.fileName || 'anexo');
+          mimeType = String(media.mimeType || media.mime_type || message.mimeType || 'application/octet-stream');
+        }
         let pathname = '';
         try {
           pathname = /^https?:\/\//i.test(rawUrl) ? new URL(rawUrl).pathname : rawUrl.split(/[?#]/)[0];
@@ -1391,16 +1420,16 @@ router.post('/:id/ixc-os', authenticate, authorize(CHAT_OPERATIONAL_ROLES), requ
         try {
           decodedFileName = decodeURIComponent(pathname.split('/').pop() || 'anexo');
         } catch {}
-        const originalName = String(media.fileName || media.filename || message.fileName || decodedFileName)
+        const safeOriginalName = String(originalName || decodedFileName)
           .replace(/[^\p{L}\p{N}._-]/gu, '_').slice(0, 120) || 'anexo';
         attachments.push({
-          messageId,
+          messageId: trustedId,
           url: `${req.protocol}://${req.get('host')}${pathname}`,
-          fileName: originalName,
-          mimeType: String(media.mimeType || media.mime_type || message.mimeType || 'application/octet-stream').slice(0, 128),
-          description: String(requested?.description || originalName).trim().slice(0, 240)
+          fileName: safeOriginalName,
+          mimeType: mimeType.slice(0, 128),
+          description: String(requested?.description || safeOriginalName).trim().slice(0, 240)
         });
-        seenMessageIds.add(messageId);
+        seenAttachments.add(attachmentKey);
       }
     }
     const operation = {
