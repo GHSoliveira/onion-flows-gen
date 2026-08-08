@@ -17,6 +17,7 @@ test('ditado local recebe audio bruto, limita uso e sempre remove o temporario',
   assert.match(route, /for await \(const rawChunk of req\)/);
   assert.match(route, /detectMime\(signature\)/);
   assert.match(route, /transcribeLocalAudio\(/);
+  assert.match(route, /beamSize: 1/);
   assert.match(route, /finally \{/);
   assert.match(route, /fs\.unlink\(filePath\)/);
   assert.doesNotMatch(route, /appendChatMessage|relayAgentMessageToGenesys|relayAgentMediaToGenesys/);

@@ -22,6 +22,8 @@ const JOB_TIMEOUT_MS = Math.max(
   Number.parseInt(process.env.TRANSCRIPTION_TIMEOUT_MS || `${20 * 60 * 1000}`, 10)
 );
 const MODEL_NAME = String(process.env.TRANSCRIPTION_MODEL || 'small').trim() || 'small';
+const PARTIAL_MODEL_NAME = String(process.env.TRANSCRIPTION_PARTIAL_MODEL || 'base').trim() || 'base';
+const ALLOWED_MODELS = new Set([MODEL_NAME, PARTIAL_MODEL_NAME]);
 const PYTHON_EXECUTABLE = String(process.env.TRANSCRIPTION_PYTHON || defaultPython).trim();
 
 let worker = null;
@@ -30,6 +32,12 @@ let stdoutBuffer = '';
 let activeJob = null;
 const queue = [];
 const inFlightByKey = new Map();
+const warmedModels = new Set();
+
+const resolveModelName = (value) => {
+  const requested = String(value || '').trim();
+  return ALLOWED_MODELS.has(requested) ? requested : MODEL_NAME;
+};
 
 const transcriptionError = (message, code = 'LOCAL_TRANSCRIPTION_FAILED') => {
   const error = new Error(message);
@@ -92,11 +100,17 @@ const handleWorkerLine = (line) => {
     ));
     return;
   }
+  const responseModel = resolveModelName(payload.model || job.modelName);
+  warmedModels.add(responseModel);
+  if (payload.warmed === true) {
+    finishJob(job, null, { warmed: true, model: responseModel });
+    return;
+  }
   finishJob(job, null, {
     text: String(payload.text || '').trim().slice(0, 20_000),
     language: String(payload.language || 'pt').slice(0, 16),
     duration: Number(payload.duration || 0) || null,
-    model: MODEL_NAME,
+    model: responseModel,
   });
 };
 
@@ -120,6 +134,7 @@ const ensureWorker = () => {
       HF_HUB_DISABLE_SYMLINKS_WARNING: '1',
       HF_HOME: String(process.env.HF_HOME || path.join(defaultRuntimeRoot, 'transcription-models')),
       ONION_TRANSCRIPTION_MODEL: MODEL_NAME,
+      ONION_TRANSCRIPTION_PARTIAL_MODEL: PARTIAL_MODEL_NAME,
       ONION_TRANSCRIPTION_DEVICE: String(process.env.TRANSCRIPTION_DEVICE || 'cpu'),
       ONION_TRANSCRIPTION_COMPUTE_TYPE: String(process.env.TRANSCRIPTION_COMPUTE_TYPE || 'int8'),
     },
@@ -140,11 +155,15 @@ const ensureWorker = () => {
     stderrTail = `${stderrTail}${chunk.toString('utf8')}`.slice(-4_000);
   });
   child.once('error', (error) => {
-    if (worker === child) worker = null;
+    if (worker !== child) return;
+    worker = null;
+    warmedModels.clear();
     failAllJobs(transcriptionError(error?.message || 'Falha ao iniciar o worker local'));
   });
   child.once('exit', (code) => {
-    if (worker === child) worker = null;
+    if (worker !== child) return;
+    worker = null;
+    warmedModels.clear();
     if (activeJob || queue.length) {
       const detail = stderrTail.trim().split(/\r?\n/).slice(-2).join(' ');
       failAllJobs(transcriptionError(
@@ -173,17 +192,32 @@ function pumpQueue() {
     );
     worker?.kill();
     worker = null;
+    warmedModels.clear();
     finishJob(job, timeoutError);
   }, JOB_TIMEOUT_MS);
   job.timer.unref?.();
-  child.stdin.write(`${JSON.stringify({ id: job.id, filePath: job.filePath })}\n`, (error) => {
+  child.stdin.write(`${JSON.stringify({
+    id: job.id,
+    action: job.action,
+    filePath: job.filePath,
+    model: job.modelName,
+    beamSize: job.beamSize,
+    vadFilter: job.vadFilter,
+  })}\n`, (error) => {
     if (error && activeJob?.id === job.id) finishJob(job, error);
   });
 }
 
-export const transcribeLocalAudio = ({ filePath, cacheKey }) => {
+const enqueueLocalTranscription = ({
+  filePath = '',
+  cacheKey,
+  action = 'transcribe',
+  modelName = MODEL_NAME,
+  beamSize = 5,
+  vadFilter = true,
+}) => {
   const safeCacheKey = String(cacheKey || filePath || '').trim();
-  if (!filePath || !safeCacheKey) {
+  if ((action !== 'warmup' && !filePath) || !safeCacheKey) {
     return Promise.reject(transcriptionError('Arquivo de áudio inválido'));
   }
   const existing = inFlightByKey.get(safeCacheKey);
@@ -200,6 +234,10 @@ export const transcribeLocalAudio = ({ filePath, cacheKey }) => {
       id: crypto.randomUUID(),
       cacheKey: safeCacheKey,
       filePath,
+      action,
+      modelName: resolveModelName(modelName),
+      beamSize: Math.max(1, Math.min(5, Number.parseInt(beamSize, 10) || 5)),
+      vadFilter: vadFilter !== false,
       resolve,
       reject,
       timer: null,
@@ -210,9 +248,32 @@ export const transcribeLocalAudio = ({ filePath, cacheKey }) => {
   return promise;
 };
 
+export const transcribeLocalAudio = ({
+  filePath,
+  cacheKey,
+  modelName = MODEL_NAME,
+  beamSize = 5,
+  vadFilter = true,
+}) => enqueueLocalTranscription({ filePath, cacheKey, modelName, beamSize, vadFilter });
+
+export const warmLocalTranscription = ({ modelName = PARTIAL_MODEL_NAME } = {}) => {
+  const safeModelName = resolveModelName(modelName);
+  if (warmedModels.has(safeModelName) && worker && !worker.killed && worker.exitCode === null) {
+    return Promise.resolve({ warmed: true, model: safeModelName, cached: true });
+  }
+  return enqueueLocalTranscription({
+    action: 'warmup',
+    cacheKey: `warmup:${safeModelName}`,
+    modelName: safeModelName,
+    beamSize: 1,
+    vadFilter: false,
+  });
+};
+
 export const getLocalTranscriptionStatus = () => ({
   ...engineAvailability(),
   model: MODEL_NAME,
+  partialModel: PARTIAL_MODEL_NAME,
   active: Boolean(activeJob),
   queued: queue.length,
   concurrency: 1,
@@ -222,6 +283,7 @@ const stopWorker = () => {
   try { worker?.stdin?.end(); } catch {}
   try { worker?.kill(); } catch {}
   worker = null;
+  warmedModels.clear();
 };
 
 process.once('exit', stopWorker);

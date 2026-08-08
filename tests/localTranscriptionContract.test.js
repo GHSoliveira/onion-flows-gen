@@ -30,10 +30,12 @@ test('transcricao usa fila de concorrencia um, deduplica e persiste cache efemer
   assert.match(service, /concurrency: 1/);
   assert.match(routes, /message\?\.meta\?\.audioTranscription/);
   assert.match(routes, /'meta\.audioTranscription': transcription/);
-  assert.match(worker, /"vad_filter": VAD_AVAILABLE/);
+  assert.match(worker, /"vad_filter": use_vad/);
   assert.match(worker, /"language": "pt"/);
   assert.match(requirements, /ctranslate2==4\.6\.0/);
   assert.match(setup, /ctranslate2\.__version__ == '4\.6\.0'/);
+  assert.match(service, /PARTIAL_MODEL_NAME/);
+  assert.match(worker, /PARTIAL_MODEL_NAME/);
 });
 
 test('player oferece transcricao somente sob demanda', async () => {

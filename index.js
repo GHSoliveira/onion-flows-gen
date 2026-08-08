@@ -23,6 +23,8 @@ import {
   isExtensionSocket,
   extensionRoomForAgent
 } from './src/services/extensionAtendimento.js';
+import { registerLocalDictationHandlers } from './src/services/localDictationSocket.js';
+import { warmLocalTranscription } from './src/services/localAudioTranscription.js';
 
 const COMPANION_MODE_EARLY = ['1', 'true', 'yes', 'on'].includes(
   String(process.env.COMPANION_MODE || '').trim().toLowerCase()
@@ -426,6 +428,7 @@ io.on('connection', (socket) => {
 
   // Genesys: ext:atendimento:* (in) + cmd:* (out) + cmd:resultado (ack)
   registerExtensionAtendimentoHandlers(socket);
+  registerLocalDictationHandlers(socket);
 
   // Rate limiting por socket (extensao + app podem gerar mais eventos)
   socket.use((event, next) => {
@@ -604,6 +607,14 @@ app.use((err, req, res, _next) => {
 
 httpServer.listen(PORT, '127.0.0.1', () => {
   console.log(`✅ Servidor rodando na porta ${PORT}`);
+  const shouldWarmDictation = !['0', 'false', 'no', 'off'].includes(
+    String(process.env.TRANSCRIPTION_WARMUP_ON_START || 'true').trim().toLowerCase()
+  );
+  if (COMPANION_MODE && shouldWarmDictation) {
+    warmLocalTranscription()
+      .then((result) => console.log(`[TRANSCRICAO] Ditado local preparado (${result.model}).`))
+      .catch((error) => console.warn(`[TRANSCRICAO] Aquecimento adiado: ${error?.message || error}`));
+  }
   if (!COMPANION_MODE && process.env.TELEGRAM_USE_POLLING === 'true') {
     console.log('✅ Telegram polling ativo');
     startTelegramPolling();

@@ -1315,6 +1315,7 @@ router.post('/:id/dictation', authenticate, authorize(CHAT_OPERATIONAL_ROLES), r
     const result = await transcribeLocalAudio({
       filePath,
       cacheKey: `dictation:${chat.tenantId}:${chat.id}:${req.user.id}:${generateId('job')}`,
+      beamSize: 1,
     });
     if (Number(result.duration || 0) > DICTATION_MAX_DURATION_SECONDS + 5) {
       const error = new Error('A gravação excede o limite local de 2 minutos.');

@@ -4,11 +4,13 @@ import sys
 import time
 
 
-MODEL_NAME = os.environ.get("ONION_TRANSCRIPTION_MODEL", "small").strip() or "small"
+DEFAULT_MODEL_NAME = os.environ.get("ONION_TRANSCRIPTION_MODEL", "small").strip() or "small"
+PARTIAL_MODEL_NAME = os.environ.get("ONION_TRANSCRIPTION_PARTIAL_MODEL", "base").strip() or "base"
 DEVICE = os.environ.get("ONION_TRANSCRIPTION_DEVICE", "cpu").strip() or "cpu"
 COMPUTE_TYPE = os.environ.get("ONION_TRANSCRIPTION_COMPUTE_TYPE", "int8").strip() or "int8"
 MODEL_CACHE = os.environ.get("HF_HOME", "").strip() or None
-model = None
+ALLOWED_MODELS = {DEFAULT_MODEL_NAME, PARTIAL_MODEL_NAME}
+models = {}
 
 try:
     import onnxruntime  # noqa: F401
@@ -22,18 +24,28 @@ def respond(payload):
     sys.stdout.flush()
 
 
-def get_model():
-    global model
-    if model is None:
+def get_model(model_name):
+    safe_model_name = model_name if model_name in ALLOWED_MODELS else DEFAULT_MODEL_NAME
+    if safe_model_name not in models:
         from faster_whisper import WhisperModel
 
-        model = WhisperModel(
-            MODEL_NAME,
+        models[safe_model_name] = WhisperModel(
+            safe_model_name,
             device=DEVICE,
             compute_type=COMPUTE_TYPE,
             download_root=MODEL_CACHE,
         )
-    return model
+    return models[safe_model_name], safe_model_name
+
+
+def warmup(job):
+    _, model_name = get_model(str(job.get("model") or DEFAULT_MODEL_NAME))
+    return {
+        "ok": True,
+        "id": job.get("id"),
+        "warmed": True,
+        "model": model_name,
+    }
 
 
 def transcribe(job):
@@ -42,17 +54,23 @@ def transcribe(job):
         raise FileNotFoundError("Arquivo de áudio local não encontrado")
 
     started_at = time.monotonic()
+    model, model_name = get_model(str(job.get("model") or DEFAULT_MODEL_NAME))
+    try:
+        beam_size = max(1, min(5, int(job.get("beamSize") or 5)))
+    except (TypeError, ValueError):
+        beam_size = 5
+    use_vad = VAD_AVAILABLE and job.get("vadFilter") is not False
     options = {
         "language": "pt",
-        "beam_size": 5,
-        "vad_filter": VAD_AVAILABLE,
+        "beam_size": beam_size,
+        "vad_filter": use_vad,
         "condition_on_previous_text": False,
         "no_speech_threshold": 0.6,
         "hallucination_silence_threshold": 2.0,
     }
-    if VAD_AVAILABLE:
+    if use_vad:
         options["vad_parameters"] = {"min_silence_duration_ms": 500}
-    segments, info = get_model().transcribe(file_path, **options)
+    segments, info = model.transcribe(file_path, **options)
     text = " ".join(segment.text.strip() for segment in segments if segment.text.strip()).strip()
     return {
         "ok": True,
@@ -60,6 +78,7 @@ def transcribe(job):
         "text": text,
         "language": getattr(info, "language", "pt") or "pt",
         "duration": getattr(info, "duration", None),
+        "model": model_name,
         "elapsedSeconds": round(time.monotonic() - started_at, 3),
     }
 
@@ -72,6 +91,9 @@ for raw_line in sys.stdin:
     try:
         request = json.loads(raw_line)
         request_id = request.get("id")
-        respond(transcribe(request))
+        if request.get("action") == "warmup":
+            respond(warmup(request))
+        else:
+            respond(transcribe(request))
     except Exception as exc:
         respond({"ok": False, "id": request_id, "error": str(exc)[:500]})

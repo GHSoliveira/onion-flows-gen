@@ -1,6 +1,6 @@
 # Onion Flows — pacote local companion
 
-Versão publicada: 5.3.22
+Versão publicada: 5.3.23
 
 ## Requisitos
 
@@ -33,7 +33,9 @@ Instalação manual:
 - Existe uma única fila de processamento para evitar sobrecarga.
 - O texto fica em cache somente junto da mensagem do atendimento local.
 - No primeiro uso, o modelo `small` é baixado; as próximas transcrições reutilizam o modelo.
-- O botão de microfone permite ditar por até 2 minutos e coloca o resultado no rascunho.
+- O botão de microfone permite ditar por até 2 minutos e mostra prévias quase em tempo real no rascunho.
+- As prévias usam `base`/beam 1 pelo socket local; ao parar, `small`/beam 1 revisa o texto completo.
+- O servidor aquece o modelo de prévia em segundo plano ao iniciar; no primeiro uso ele baixa esse modelo uma única vez.
 - O ditado nunca envia a mensagem automaticamente e apaga a gravação temporária ao concluir.
 
 ## Logins locais iniciais

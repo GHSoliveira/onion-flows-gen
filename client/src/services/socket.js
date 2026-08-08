@@ -142,6 +142,34 @@ class SocketService {
     this.socket.emit('heartbeat');
   }
 
+  requestAcknowledgement(event, payload, timeoutMs = 30000) {
+    if (!this.socket?.connected) {
+      return Promise.reject(new Error('Socket local desconectado'));
+    }
+    return new Promise((resolve, reject) => {
+      this.socket.timeout(timeoutMs).emit(event, payload, (error, response) => {
+        if (error) {
+          reject(new Error('O mecanismo local demorou para responder'));
+          return;
+        }
+        resolve(response || {});
+      });
+    });
+  }
+
+  warmDictation(chatId) {
+    return this.requestAcknowledgement('dictation:warmup', { chatId }, 120000);
+  }
+
+  transcribeDictationPartial({ chatId, sequence, audio, durationSeconds }) {
+    return this.requestAcknowledgement('dictation:partial', {
+      chatId,
+      sequence,
+      audio,
+      durationSeconds,
+    }, 30000);
+  }
+
   isConnected() {
     return this.socket?.connected === true;
   }
