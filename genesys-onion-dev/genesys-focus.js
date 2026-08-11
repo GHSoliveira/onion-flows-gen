@@ -201,6 +201,8 @@
            customerBranch: "",
            openedAt: null,
            inactivityTimeout: null,
+           genesysMediaType: "",
+           call: null,
            agentActive: null,
            active: null
         });
@@ -266,20 +268,101 @@
         entry.customerPon = attributeValue("Pon_Link", "pon_link", "PON", "pon", "pon_id").slice(0, 100);
         entry.customerBranch = attributeValue("ID_Filial", "id_filial", "filial", "Filial").slice(0, 80);
         entry.customerPhone = String(
-          (Array.isArray(customer?.messages) ? customer.messages : [])
+          [
+            ...(Array.isArray(customer?.calls) ? customer.calls : []),
+            ...(Array.isArray(customer?.messages) ? customer.messages : [])
+          ]
             .map((communication) => (
               communication?.fromAddress?.addressRaw
               || communication?.fromAddress?.addressNormalized
+              || communication?.other?.addressRaw
+              || communication?.other?.addressNormalized
+              || communication?.addressRaw
+              || communication?.address
               || ""
             ))
             .find(Boolean)
+          || customer?.address
           || ""
         ).replace(/\D/g, "").slice(0, 30);
         const agents = participants.filter(
           (participant) => String(participant?.purpose || "").toLowerCase() === "agent"
         );
+        const voiceCandidates = [];
+        for (const participant of participants) {
+          const purpose = String(participant?.purpose || "").toLowerCase();
+          for (const communication of Array.isArray(participant?.calls) ? participant.calls : []) {
+            const rawState = String(communication?.state || "").toLowerCase();
+            const terminal = ["disconnected", "terminated"].includes(rawState) || Boolean(communication?.disconnectedTime);
+            const connectedAt = new Date(
+              communication?.connectedTime
+              || participant?.connectedTime
+              || communication?.startTime
+              || participant?.startTime
+              || conversation?.startTime
+              || 0
+            ).getTime() || 0;
+            const startedAt = new Date(
+              communication?.startTime || participant?.startTime || conversation?.startTime || 0
+            ).getTime() || connectedAt;
+            voiceCandidates.push({ participant, communication, purpose, rawState, terminal, connectedAt, startedAt });
+          }
+        }
+        if (voiceCandidates.length) {
+          entry.genesysMediaType = "voice";
+          const ranked = voiceCandidates.slice().sort((left, right) => {
+            const leftAgent = left.purpose === "agent" ? 1 : 0;
+            const rightAgent = right.purpose === "agent" ? 1 : 0;
+            const leftLive = !left.terminal && !left.participant?.endTime ? 1 : 0;
+            const rightLive = !right.terminal && !right.participant?.endTime ? 1 : 0;
+            return rightLive - leftLive || rightAgent - leftAgent || right.connectedAt - left.connectedAt;
+          });
+          const selected = ranked[0];
+          const rawState = selected.rawState;
+          const estado = selected.communication?.held === true
+            ? "held"
+            : selected.terminal
+              ? "disconnected"
+              : ["alerting", "dialing", "contacting", "offering", "ringing"].includes(rawState)
+                ? "alerting"
+                : "connected";
+          const addressDigits = (...values) => String(values.find((value) => String(value || "").trim()) || "")
+            .replace(/\D/g, "")
+            .slice(0, 30);
+          const customerCall = voiceCandidates.find((candidate) => candidate.purpose === "customer")?.communication;
+          entry.call = {
+            estado,
+            conectadoEm: selected.connectedAt || null,
+            desde: selected.startedAt || selected.connectedAt || Date.now(),
+            direcao: ["inbound", "outbound"].includes(String(selected.communication?.direction || "").toLowerCase())
+              ? String(selected.communication.direction).toLowerCase()
+              : "inbound",
+            ani: addressDigits(
+              customerCall?.fromAddress?.addressRaw,
+              customerCall?.fromAddress?.addressNormalized,
+              customerCall?.other?.addressRaw,
+              customerCall?.other?.addressNormalized,
+              customer?.address,
+              entry.customerPhone,
+              entry.customerName
+            ),
+            dnis: addressDigits(
+              selected.communication?.toAddress?.addressRaw,
+              selected.communication?.toAddress?.addressNormalized,
+              selected.communication?.self?.addressRaw,
+              selected.communication?.self?.addressNormalized
+            )
+          };
+        }
         entry.agentActive = agents.some((participant) => {
           if (participant?.endTime) return false;
+          const calls = Array.isArray(participant?.calls) ? participant.calls : [];
+          if (calls.length) {
+            return calls.some((communication) => (
+              !communication?.disconnectedTime
+              && !["disconnected", "terminated"].includes(String(communication?.state || "").toLowerCase())
+            ));
+          }
           const communications = Array.isArray(participant?.messages) ? participant.messages : [];
           if (!communications.length) return true;
           return communications.some((communication) => (
@@ -407,6 +490,8 @@
         customerBranch: entry.customerBranch,
         openedAt: entry.openedAt,
         inactivityTimeout: entry.inactivityTimeout,
+        genesysMediaType: entry.genesysMediaType,
+        call: entry.call,
         agentActive: entry.agentActive,
         active: entry.active
       };

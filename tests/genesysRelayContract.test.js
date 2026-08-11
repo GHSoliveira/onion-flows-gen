@@ -149,3 +149,117 @@ test('mídias consecutivas mantêm identidade própria no espelho Genesys', asyn
   assert.match(extension, /additionalMedia: mediaItems\.slice\(1\)/);
   assert.match(extension, /flatMap\(expandGenesysMessageMedia\)/);
 });
+
+test('delta resolve o chat do próprio agente antes de cair no gêmeo de outro', async () => {
+  const relay = await loadRelaySource();
+  const mensagem = relay.slice(
+    relay.indexOf('export const handleExtMensagem'),
+    relay.indexOf('export const handleExtCliente')
+  );
+  // Sem agentId, o doc mais recente de outro agente vence a busca e o delta
+  // morre em chat_de_outro_agente — erro não-terminal que retenta pra sempre.
+  assert.match(mensagem, /findChatByConvId\(\{\s*tenantId,\s*convId,\s*agentId\s*\}\)/);
+  assert.doesNotMatch(mensagem, /findChatByConvId\(\{\s*tenantId,\s*convId\s*\}\)/);
+  assert.match(mensagem, /chat_de_outro_agente/);
+});
+
+test('ligação chega como card de voz sem virar mensagem e com âncora estável', async () => {
+  const relay = await loadRelaySource();
+  const workspace = await loadAgentWorkspaceSource();
+  const extension = await readFile(new URL('../genesys-onion-dev/background.js', import.meta.url), 'utf8');
+  const observer = await readFile(new URL('../genesys-onion-dev/genesys-focus.js', import.meta.url), 'utf8');
+  const content = await readFile(new URL('../genesys-onion-dev/content.js', import.meta.url), 'utf8');
+  const ligacao = relay.slice(
+    relay.indexOf('const handleExtLigacaoUnlocked'),
+    relay.indexOf('export const handleExtLigacao =')
+  );
+  // Precisa marcar voz nos dois campos, senão isGenesysCallShell não acende.
+  assert.match(ligacao, /live\.genesysMediaType = 'voice'/);
+  assert.match(ligacao, /live\.conversationType = 'voice'/);
+  // Estado de ligação nunca vira mensagem: messageCount tem que continuar 0.
+  assert.doesNotMatch(ligacao, /appendChatMessage/);
+  // A âncora do cronômetro se fixa uma vez só — reenvio não reinicia a contagem.
+  assert.match(ligacao, /previous\?\.conectadoEm \|\| desde/);
+  // Cliente cai já conectado: faltar âncora não pode sumir com o card inteiro,
+  // só marcar que o cronômetro começou aproximado.
+  assert.match(ligacao, /const ancoraAproximada = estado === 'connected'/);
+  assert.match(ligacao, /ancoraAproximada: ancoraAproximada \|\| previous\?\.ancoraAproximada === true/);
+  assert.doesNotMatch(ligacao, /missing_conectadoEm/);
+  // O decorrido nunca trafega: só a âncora.
+  assert.doesNotMatch(ligacao, /duracao|elapsed/i);
+  assert.match(relay, /socket\.on\('ext:atendimento:ligacao'/);
+  // O mesmo payload que fazia nascer o card temporário é identificado no
+  // observador e segue direto ao banner, sem polling nem refresh de lista.
+  assert.match(observer, /participant\?\.calls/);
+  assert.match(observer, /entry\.genesysMediaType = "voice"/);
+  assert.match(content, /genesysMediaType: String\(item\?\.genesysMediaType/);
+  assert.match(content, /call: item\?\.call/);
+  assert.match(extension, /async function processPassiveCallStates/);
+  assert.match(extension, /emit\("ext:atendimento:ligacao"/);
+  assert.match(extension, /if \(item\?\.genesysMediaType === "voice"\) return/);
+  assert.match(relay, /genesys_call_state'[\s\S]*?chat: pub/);
+  assert.match(workspace, /const incomingChat = event\?\.chat/);
+  assert.match(workspace, /setActiveCalls\(\(list\) => \[/);
+  assert.match(workspace, /<span>Confirmar<\/span>/);
+});
+
+test('estado de ligação descarta geração antiga e retry fora de ordem', async () => {
+  const relay = await loadRelaySource();
+  const ligacao = relay.slice(
+    relay.indexOf('const handleExtLigacaoUnlocked'),
+    relay.indexOf('export const handleExtLigacao =')
+  );
+  assert.match(ligacao, /GENESYS_CALL_STATES\.has\(estado\)/);
+  assert.match(ligacao, /error: 'seq obrigatorio/);
+  // seq monotônico: o backoff do outbox pode entregar connected depois de held.
+  assert.match(ligacao, /seq <= Number\(previous\.seq\)/);
+  assert.match(ligacao, /ignoredReason = 'stale_seq'/);
+  // Sequência é por sessão: geração nova reinicia a contagem.
+  assert.match(ligacao, /previous\.syncGeneration === syncGeneration/);
+  assert.match(ligacao, /reason: 'stale_sync_generation'/);
+  // Fechamento não pode ressuscitar card inexistente.
+  assert.match(ligacao, /!chat && estado === 'disconnected'/);
+});
+
+test('watcher expira ligação zumbi em dois estágios sem matar keepalive atrasado', async () => {
+  const watcher = await readFile(
+    new URL('../src/services/chatRuntimeWatcher.js', import.meta.url),
+    'utf8'
+  );
+  assert.match(watcher, /const handleGenesysCallExpiry/);
+  assert.match(watcher, /isGenesysCallShell\(chat\) \|\| chat\.status !== 'open'/);
+  // Card anterior ao contrato não tem TTL: não pode ser fechado por engano.
+  assert.match(watcher, /if \(!call \|\| call\.estado === 'disconnected'\) return/);
+  // Estágio 1 congela, estágio 2 fecha — nunca fecha direto.
+  assert.match(watcher, /const shouldClose = alreadyStale/);
+  assert.match(watcher, /stale: true, staleAt: Date\.now\(\)/);
+  assert.match(watcher, /closeReason = 'genesys_ligacao_sem_sinal'/);
+  // Revalida o TTL sob lock: evento fresco no meio do caminho cancela a expiração.
+  assert.match(watcher, /if \(Number\.isFinite\(liveExpiresAt\) && Date\.now\(\) <= liveExpiresAt\) return/);
+  assert.match(watcher, /await handleGenesysCallExpiry\(afterInactivityChat\)/);
+});
+
+test('watcher reconcilia espelho Genesys calado sem forçar re-seed nem insistir', async () => {
+  const watcher = await readFile(
+    new URL('../src/services/chatRuntimeWatcher.js', import.meta.url),
+    'utf8'
+  );
+  assert.match(watcher, /const handleGenesysMirrorReconcile/);
+  // Só espelho vivo, com dono e já bootstrapado.
+  assert.match(watcher, /chat\.status !== 'open' \|\| !chat\.agentId/);
+  assert.match(watcher, /if \(!chat\.historySeeded\) return/);
+  // Voz/callback nunca tem mensagem: reconciliar seria pedir vazio pra sempre.
+  assert.match(watcher, /isGenesysEmptyShell\(chat\)/);
+  // Nunca re-seeda histórico: a extensão decide o que falta.
+  assert.match(watcher, /force:\s*false/);
+  assert.match(watcher, /watch:\s*true/);
+  // Cooldown e idle antes de pedir, e limpeza do estado em memória.
+  assert.match(watcher, /idleMs < GENESYS_RECONCILE_IDLE_MS/);
+  assert.match(watcher, /now - lastAskedAt < GENESYS_RECONCILE_COOLDOWN_MS/);
+  assert.match(watcher, /genesysReconcileLastAskedAt\.set\(chat\.id, now\)/);
+  assert.match(watcher, /pruneGenesysReconcileState/);
+  // Extensão offline é o caso esperado: não polui log.
+  assert.match(watcher, /result\?\.reason !== 'extension_offline'/);
+  // Ligado no tick, depois de revalidar que o chat não fechou.
+  assert.match(watcher, /await handleGenesysMirrorReconcile\(afterInactivityChat\)/);
+});

@@ -835,7 +835,10 @@ export const handleExtMensagem = async (socket, payload = {}) => {
     messageId = `${String(convId).slice(0, 36)}:${messageId}`;
   }
 
-  const chat = await findChatByConvId({ tenantId, convId });
+  // agentId resolve o doc do próprio agente primeiro: sem ele, um "gêmeo" mais
+  // recente de outro agente seria escolhido e a mensagem cairia em
+  // chat_de_outro_agente — erro não-terminal que retenta no outbox para sempre.
+  const chat = await findChatByConvId({ tenantId, convId, agentId });
   if (!chat) return { ok: false, error: 'Atendimento nao encontrado — envie upsert antes' };
   if (chat.status === 'closed') return { ok: false, error: 'Atendimento ja encerrado' };
 
@@ -1131,6 +1134,232 @@ export const handleExtEncerrar = async (socket, payload = {}) => {
   return withLock(
     `genesys-conversation:${tenantId}:${convId}`,
     () => handleExtEncerrarUnlocked(socket, payload)
+  );
+};
+
+// ─── Ligação (voz): card com cronômetro ancorado ────────────────────────────
+
+export const GENESYS_CALL_STATES = new Set(['alerting', 'connected', 'held', 'disconnected']);
+// TTL implícito quando a extensão não declara `expiraEm`.
+export const GENESYS_CALL_DEFAULT_TTL_MS = 45000;
+
+const toEpochMs = (value, fallback = null) => {
+  if (value === undefined || value === null || value === '') return fallback;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return fallback;
+  // epoch em segundos vs ms
+  return numeric < 1e12 ? Math.round(numeric * 1000) : Math.round(numeric);
+};
+
+/**
+ * Extensão → app: estado da ligação.
+ *
+ * O cronômetro NUNCA trafega: o app guarda a âncora (`conectadoEm`) e o painel
+ * calcula `Date.now() - conectadoEm` localmente. Socket caído deixa de ser
+ * problema de cronômetro — ele continua correto sozinho.
+ *
+ * Blindagem em três camadas:
+ *  - `syncGeneration` descarta evento de sessão antiga (convId reciclado);
+ *  - `seq` monotônico descarta retry fora de ordem (o backoff do outbox pode
+ *    entregar `connected` depois de `held` e travar o card no estado errado);
+ *  - `expiraEm` deixa o card se acusar quando a extensão some, em vez de
+ *    contar para sempre uma ligação que já acabou.
+ *
+ * Estado de ligação nunca vira mensagem: `messageCount` precisa continuar 0,
+ * senão o card deixa de ser call shell e cai na lista de mensagens.
+ */
+const handleExtLigacaoUnlocked = async (socket, payload = {}) => {
+  const { agentId, tenantId, agentName } = ensureAgentContext(socket);
+  const convId = pickString(payload.convId, payload.conversationId);
+  if (!convId) return { ok: false, error: 'convId obrigatorio' };
+
+  const estado = pickString(payload.estado, payload.state).toLowerCase();
+  if (!GENESYS_CALL_STATES.has(estado)) {
+    return { ok: false, error: 'estado invalido', estado: estado || null };
+  }
+
+  const syncGeneration = pickString(payload.syncGeneration);
+  const seqRaw = Number(payload.seq);
+  if (!Number.isFinite(seqRaw) || seqRaw < 0) {
+    return { ok: false, error: 'seq obrigatorio (monotonico por conversa)' };
+  }
+  const seq = Math.round(seqRaw);
+
+  const now = Date.now();
+  const desde = toEpochMs(payload.desde, now);
+  const conectadoEm = toEpochMs(payload.conectadoEm, null);
+  const expiraEm = toEpochMs(payload.expiraEm, now + GENESYS_CALL_DEFAULT_TTL_MS);
+  const direcao = ['inbound', 'outbound'].includes(pickString(payload.direcao).toLowerCase())
+    ? pickString(payload.direcao).toLowerCase()
+    : 'inbound';
+  const ani = onlyDigits(pickString(payload.ani, payload.from));
+  const dnis = onlyDigits(pickString(payload.dnis, payload.to));
+
+  let chat = await findChatByConvId({ tenantId, convId, agentId });
+
+  // `disconnected` nunca cria card: se não existe, não há zumbi a limpar.
+  if (!chat && estado === 'disconnected') {
+    return { ok: true, missing: true, convId, estado };
+  }
+
+  if (!chat) {
+    // Reusa o upsert para nascer com identidade, geração e vars coerentes —
+    // só marca o tipo como voz para acender o caminho de call shell.
+    const seeded = await handleExtUpsertUnlocked(socket, {
+      convId,
+      syncGeneration,
+      canal: 'genesys',
+      status: 'open',
+      genesysMediaType: 'voice',
+      abertoEm: conectadoEm || desde,
+      cliente: {
+        ...(payload.cliente || {}),
+        ...(ani && !payload.cliente?.telefone ? { telefone: ani } : {})
+      }
+    });
+    if (!seeded?.ok) return seeded;
+    chat = await findChatByConvId({ tenantId, convId, agentId });
+    if (!chat) return { ok: false, error: 'falha ao criar card de ligacao', convId };
+  }
+
+  const chatConv = pickString(chat.genesysConvId, chat.externalConvId);
+  if (chatConv && chatConv !== convId) {
+    return { ok: false, error: 'convId_mismatch', chatId: chat.id };
+  }
+
+  const currentGeneration = pickString(chat.genesysSyncGeneration);
+  if (currentGeneration && syncGeneration && syncGeneration !== currentGeneration) {
+    return {
+      ok: true,
+      stale: true,
+      ignored: true,
+      reason: 'stale_sync_generation',
+      chatId: chat.id,
+      convId,
+      currentSyncGeneration: currentGeneration
+    };
+  }
+
+  let applied = false;
+  let ignoredReason = null;
+  let liveChat = chat;
+
+  await withChatLock(chat.id, async () => {
+    const live = await adapter.findOne('activeChats', { id: chat.id }, { projection: { _id: 0 } }) || chat;
+    const liveConv = pickString(live.genesysConvId, live.externalConvId);
+    if (liveConv && liveConv !== convId) {
+      ignoredReason = 'convId_mismatch';
+      return;
+    }
+
+    const previous = live.genesysCall && typeof live.genesysCall === 'object' ? live.genesysCall : null;
+
+    // O cliente cai já conectado, então toda ligação nasce em `connected`:
+    // recusar o evento por falta de âncora sumiria com o card inteiro, e
+    // perder a ligação é pior que perder segundos. Aceita ancorando na
+    // observação, mas marca como aproximada para a interface não mentir.
+    const ancoraAproximada = estado === 'connected'
+      && !conectadoEm
+      && !previous?.conectadoEm;
+    // A sequência é por sessão: geração nova reinicia a contagem.
+    const sameGeneration = !syncGeneration
+      || !previous?.syncGeneration
+      || previous.syncGeneration === syncGeneration;
+    if (previous && sameGeneration && Number.isFinite(Number(previous.seq)) && seq <= Number(previous.seq)) {
+      ignoredReason = 'stale_seq';
+      liveChat = live;
+      return;
+    }
+
+    live.genesysMediaType = 'voice';
+    live.conversationType = 'voice';
+    live.genesysCall = {
+      estado,
+      seq,
+      syncGeneration: syncGeneration || previous?.syncGeneration || null,
+      desde,
+      // A âncora só se fixa uma vez: reenvio de estado não reinicia o cronômetro.
+      conectadoEm: conectadoEm
+        || (estado === 'connected' ? (previous?.conectadoEm || desde) : (previous?.conectadoEm || null)),
+      expiraEm,
+      direcao,
+      ani: ani || previous?.ani || null,
+      dnis: dnis || previous?.dnis || null,
+      wrapupPendente: payload.wrapupPendente === true,
+      // Âncora vinda da observação da extensão, não do connectedTime do
+      // Genesys: o cronômetro pode começar alguns segundos atrasado.
+      ancoraAproximada: ancoraAproximada || previous?.ancoraAproximada === true,
+      stale: false,
+      staleAt: null,
+      atualizadoEm: now
+    };
+    live.updatedAt = new Date().toISOString();
+
+    if (estado === 'disconnected') {
+      live.status = 'closed';
+      live.closedAt = new Date().toISOString();
+      live.closeReason = pickString(payload.motivo, 'genesys_ligacao_encerrada');
+      live.genesysMirrorPhase = 'closed';
+      live.waitingSince = null;
+    } else if (live.status !== 'open') {
+      live.status = 'open';
+      live.agentId = agentId;
+      live.agentName = agentName;
+      live.waitingSince = null;
+    }
+
+    await adapter.saveDocument('activeChats', live);
+    liveChat = live;
+    applied = true;
+  });
+
+  if (!applied) {
+    return {
+      ok: true,
+      ignored: true,
+      reason: ignoredReason || 'nao_aplicado',
+      chatId: chat.id,
+      convId,
+      estado
+    };
+  }
+
+  const pub = publicChat(liveChat);
+  emitToAgentPanel(liveChat, 'genesys_call_state', {
+    chatId: liveChat.id,
+    convId,
+    call: liveChat.genesysCall,
+    chat: pub
+  });
+  emitToAgentPanel(liveChat, 'chat_updated', { chat: pub });
+  if (estado === 'disconnected') {
+    emitToAgentPanel(liveChat, 'chat_closed', {
+      chatId: liveChat.id,
+      convId,
+      motivo: liveChat.closeReason,
+      source: 'genesys_extension'
+    });
+  }
+
+  return {
+    ok: true,
+    chatId: liveChat.id,
+    convId,
+    estado,
+    seq,
+    conectadoEm: liveChat.genesysCall?.conectadoEm || null,
+    // A extensão vê no ack quando o Onion teve que aproximar a âncora.
+    ancoraAproximada: liveChat.genesysCall?.ancoraAproximada === true,
+    expiraEm: liveChat.genesysCall?.expiraEm || null
+  };
+};
+
+export const handleExtLigacao = async (socket, payload = {}) => {
+  const convId = pickString(payload.convId, payload.conversationId, 'missing');
+  const tenantId = pickString(socket?.tenantId, 'missing');
+  return withLock(
+    `genesys-conversation:${tenantId}:${convId}`,
+    () => handleExtLigacaoUnlocked(socket, payload)
   );
 };
 
@@ -1885,6 +2114,7 @@ export const registerExtensionAtendimentoHandlers = (socket) => {
   socket.on('ext:atendimento:mensagem', wrap(handleExtMensagem, 'mensagem'));
   socket.on('ext:atendimento:cliente', wrap(handleExtCliente, 'cliente'));
   socket.on('ext:atendimento:encerrar', wrap(handleExtEncerrar, 'encerrar'));
+  socket.on('ext:atendimento:ligacao', wrap(handleExtLigacao, 'ligacao'));
 
   socket.on('ext:log:error', (payload = {}) => {
     if (!socket.userId || !isExtensionSocket(socket)) return;

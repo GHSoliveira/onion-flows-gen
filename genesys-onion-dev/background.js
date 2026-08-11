@@ -2254,6 +2254,10 @@ function conversationState(id) {
     lastApiConfirmedAt: 0,
     observedMessageCount: 0,
     observedAgentCommunicationIds: new Set(),
+    callSeq: 0,
+    callUpserted: false,
+    lastCallSignature: "",
+    lastCallEmittedAt: 0,
     participantName: "",
     passiveDiscoveryPending: false,
     passivePendingMessageIds: new Set(),
@@ -2286,6 +2290,10 @@ function reviveClosedConversationState(conversationId, state, source = "active-e
   state.passiveMediaPendingAt = new Map();
   state.observedMessageCount = 0;
   state.observedMissingMessageCount = 0;
+  state.callSeq = 0;
+  state.callUpserted = false;
+  state.lastCallSignature = "";
+  state.lastCallEmittedAt = 0;
   closureSuspicions.delete(conversationId);
   log("info", "Conversa Genesys reaberta como nova sessão", `${conversationId.slice(0, 8)} · ${source}`);
   return true;
@@ -2331,6 +2339,17 @@ function normalizeNotificationSnapshot(raw, observedAt = Date.now()) {
     customerOlt: String(raw?.customerOlt || "").replace(/\s+/g, " ").trim().slice(0, 200),
     customerPon: String(raw?.customerPon || "").trim().slice(0, 100),
     customerBranch: String(raw?.customerBranch || "").trim().slice(0, 80),
+    genesysMediaType: String(raw?.genesysMediaType || "").trim().toLowerCase() === "voice" ? "voice" : "",
+    call: raw?.call && typeof raw.call === "object" ? {
+      estado: ["alerting", "connected", "held", "disconnected"].includes(String(raw.call.estado || "").toLowerCase())
+        ? String(raw.call.estado).toLowerCase()
+        : "",
+      conectadoEm: Number(raw.call.conectadoEm || 0) || null,
+      desde: Number(raw.call.desde || 0) || null,
+      direcao: String(raw.call.direcao || "").trim().toLowerCase().slice(0, 30),
+      ani: String(raw.call.ani || "").replace(/\D/g, "").slice(0, 30),
+      dnis: String(raw.call.dnis || "").replace(/\D/g, "").slice(0, 30)
+    } : null,
     openedAt: raw?.openedAt || null,
     inactivityTimeout: raw?.inactivityTimeout || null,
     agentCommunicationIds: (Array.isArray(raw?.agentCommunicationIds) ? raw.agentCommunicationIds : [])
@@ -2491,6 +2510,121 @@ function deliverConversationUpsertToOnion(payload, failureLabel = "Upsert sem co
 function deliverPassiveConversationToOnion(payload) {
   return deliverConversationUpsertToOnion(payload, "Descoberta passiva sem confirmação");
 }
+const PASSIVE_CALL_KEEPALIVE_MS = 15000;
+const PASSIVE_CALL_TTL_MS = 60000;
+
+async function processPassiveCallStates(message = {}) {
+  const status = Number(message.status || 200);
+  if (status < 200 || status >= 300) return;
+  const conversationsToInspect = Array.isArray(message.conversations) ? message.conversations : [];
+  if (!conversationsToInspect.some((item) => item?.genesysMediaType === "voice" && item?.call)) return;
+
+  const [cfg, credentials] = await Promise.all([settings(), auth()]);
+  if (!cfg.enabled || cfg.observeNetwork === false || !credentials?.token || !socket?.connected) return;
+
+  await mapWithConcurrency(
+    conversationsToInspect,
+    MAX_PASSIVE_CONVERSATION_CONCURRENCY,
+    async (item) => {
+      const conversationId = String(item?.conversationId || "");
+      const call = item?.call;
+      const estado = String(call?.estado || "").toLowerCase();
+      if (
+        !UUID_RE.test(conversationId)
+        || item?.genesysMediaType !== "voice"
+        || !["alerting", "connected", "held", "disconnected"].includes(estado)
+      ) return;
+
+      const now = Number(message.observedAt || item?.observedAt || Date.now());
+      const state = conversationState(conversationId);
+      if (item?.agentActive === true) {
+        reviveClosedConversationState(conversationId, state, "passive-call");
+        state.observedAgentActive = true;
+        state.lastNetworkSeenAt = now;
+        state.closed = false;
+        if (deliveryRosterGuard.blocking) deliveryRosterGuard.activeIds.add(conversationId);
+      }
+
+      const customerName = validParticipantName(item?.customerName)
+        || String(call?.ani || item?.customerPhone || "").trim()
+        || "Ligação Genesys";
+      state.participantName = customerName;
+
+      if (estado !== "disconnected" && !state.callUpserted) {
+        const primaryClient = genesysPrimaryClientPayload({
+          document: findValidDocuments(item?.customerDocument)[0] || null,
+          address: item?.customerAddress,
+          city: item?.customerCity,
+          phone: item?.customerPhone || call?.ani,
+          legalName: item?.customerLegalName,
+          pppoe: item?.customerPppoe,
+          ip: item?.customerIp,
+          contractId: item?.customerContractId,
+          olt: item?.customerOlt,
+          pon: item?.customerPon,
+          branch: item?.customerBranch
+        }, customerName);
+        const delivered = await deliverConversationUpsertToOnion({
+          convId: conversationId,
+          syncGeneration: state.syncGeneration,
+          canal: "genesys",
+          genesysMediaType: "voice",
+          conversationType: "voice",
+          status: "open",
+          cliente: primaryClient,
+          abertoEm: Number(call?.conectadoEm || call?.desde || now),
+          source: "genesys-passive-call",
+          environment: "dev"
+        }, "Ligação sem confirmação do Onion");
+        if (!delivered || state.closed) return;
+        state.callUpserted = true;
+        state.upserted = true;
+        state.lifecycle = "ACTIVE";
+      }
+
+      if (estado === "disconnected" && !state.callUpserted && !state.upserted) return;
+      const signature = [
+        estado,
+        Number(call?.conectadoEm || 0),
+        Number(call?.desde || 0),
+        String(call?.direcao || ""),
+        String(call?.ani || ""),
+        String(call?.dnis || "")
+      ].join("|");
+      if (
+        signature === state.lastCallSignature
+        && now - Number(state.lastCallEmittedAt || 0) < PASSIVE_CALL_KEEPALIVE_MS
+      ) return;
+
+      state.callSeq = Number(state.callSeq || 0) + 1;
+      state.lastCallSignature = signature;
+      state.lastCallEmittedAt = now;
+      emit("ext:atendimento:ligacao", {
+        convId: conversationId,
+        syncGeneration: state.syncGeneration,
+        seq: state.callSeq,
+        estado,
+        desde: Number(call?.desde || now),
+        conectadoEm: Number(call?.conectadoEm || call?.desde || now),
+        expiraEm: now + PASSIVE_CALL_TTL_MS,
+        direcao: String(call?.direcao || ""),
+        ani: String(call?.ani || ""),
+        dnis: String(call?.dnis || ""),
+        cliente: {
+          nomeWhatsapp: customerName,
+          name: customerName,
+          displayName: customerName,
+          phone: String(item?.customerPhone || call?.ani || "")
+        },
+        source: "genesys-passive-call",
+        environment: "dev"
+      });
+
+      if (estado === "disconnected") state.callUpserted = false;
+    }
+  );
+}
+
 async function processPassiveConversationDiscovery(message = {}) {
   const status = Number(message.status || 0);
   if (
@@ -2511,6 +2645,7 @@ async function processPassiveConversationDiscovery(message = {}) {
     Array.isArray(message.conversations) ? message.conversations : [],
     MAX_PASSIVE_CONVERSATION_CONCURRENCY,
     async (item) => {
+      if (item?.genesysMediaType === "voice") return;
       const conversationId = String(item?.conversationId || "");
       const customerName = validParticipantName(item?.customerName);
       if (!UUID_RE.test(conversationId) || item?.agentActive !== true || !customerName) {
@@ -3781,6 +3916,17 @@ async function syncConversationFromNotification(conversationId) {
     const [cfg, credentials] = await Promise.all([settings(), auth()]);
     if (!cfg.enabled || !credentials?.token) return;
     const notificationSnapshot = notificationSnapshots.get(conversationId);
+    if (
+      notificationSnapshot?.genesysMediaType === "voice"
+      && Date.now() - Number(notificationSnapshot.observedAt || 0) <= NOTIFICATION_SNAPSHOT_MAX_AGE_MS
+    ) {
+      await processPassiveCallStates({
+        status: 200,
+        observedAt: notificationSnapshot.observedAt,
+        conversations: [notificationSnapshot]
+      });
+      return;
+    }
     const useNotificationSnapshot = (
       notificationSnapshot
       && Date.now() - Number(notificationSnapshot.observedAt || 0) <= NOTIFICATION_SNAPSHOT_MAX_AGE_MS
@@ -4805,7 +4951,8 @@ function socketEventKey(event, payload = {}) {
   if ([
     "ext:atendimento:upsert",
     "ext:atendimento:cliente",
-    "ext:atendimento:encerrar"
+    "ext:atendimento:encerrar",
+    "ext:atendimento:ligacao"
   ].includes(event)) {
     return `${event}:${conversationId}`;
   }
@@ -5326,6 +5473,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     observeConversationNetwork(message);
     Promise.all([
+      processPassiveCallStates(message),
       processPassiveConversationDiscovery(message),
       processPassiveMessageDeltas(message)
     ])
@@ -5357,12 +5505,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ ok: false, error: "notification_origem_invalida" });
       return;
     }
+    let snapshot = null;
     if (message.conversation && Number(message.schemaVersion || 0) >= 2) {
-      const snapshot = rememberNotificationSnapshot(message.conversation, message.observedAt);
+      snapshot = rememberNotificationSnapshot(message.conversation, message.observedAt);
       if (!snapshot || snapshot.conversationId !== conversationId) {
         sendResponse({ ok: false, error: "notification_snapshot_invalido" });
         return;
       }
+    }
+    if (snapshot?.genesysMediaType === "voice") {
+      processPassiveCallStates({
+        status: 200,
+        observedAt: snapshot.observedAt,
+        conversations: [snapshot]
+      }).catch((error) => {
+        log("error", "Falha ao sincronizar ligação Genesys", error?.message || "erro");
+      });
+      sendResponse({ ok: true, targeted: true, voice: true });
+      return;
     }
     scheduleNotificationSync(conversationId);
     sendResponse({ ok: true, targeted: notificationSnapshots.has(conversationId) });

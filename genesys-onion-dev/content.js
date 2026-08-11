@@ -305,6 +305,15 @@
       customerBranch: String(item?.customerBranch || "").trim().slice(0, 80),
       openedAt: item?.openedAt || null,
       inactivityTimeout: item?.inactivityTimeout || null,
+      genesysMediaType: String(item?.genesysMediaType || "").toLowerCase() === "voice" ? "voice" : "",
+      call: item?.call && typeof item.call === "object" ? {
+        estado: String(item.call.estado || "").slice(0, 30),
+        conectadoEm: Number(item.call.conectadoEm || 0) || null,
+        desde: Number(item.call.desde || 0) || null,
+        direcao: String(item.call.direcao || "").slice(0, 20),
+        ani: String(item.call.ani || "").replace(/\D/g, "").slice(0, 30),
+        dnis: String(item.call.dnis || "").replace(/\D/g, "").slice(0, 30)
+      } : null,
       agentActive: typeof item?.agentActive === "boolean" ? item.agentActive : null,
       active: typeof item?.active === "boolean" ? item.active : null
     };

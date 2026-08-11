@@ -338,6 +338,12 @@ const CHAT_SUMMARY_PROJECTION = {
   historySeeded: 1,
   identityFrozen: 1,
   genesysMirrorPhase: 1,
+  // Sem o tipo, isGenesysCallShell lê undefined e toda ligação some das duas
+  // listas: não entra em activeCalls e é descartada de active como shell vazio.
+  genesysMediaType: 1,
+  conversationType: 1,
+  // Estado da ligação: âncora do cronômetro, estado e flag de sem sinal.
+  genesysCall: 1,
 };
 
 const normalizeDate = (value, endOfDay = false) => {

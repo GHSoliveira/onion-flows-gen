@@ -25,6 +25,7 @@ import { CenterSkeleton } from '../components/LoadingSkeleton';
 import { sortChatsForMode } from '../utils/chatSorting';
 import { summarizeIxcOsAlerts } from '../utils/ixcOsAlerts';
 import { findIxcSectorSuggestion, IXC_SECTOR_OPTIONS } from '../utils/ixcSectorCatalog';
+import { bindRingerUnlock, startRinging, stopRinging, subscribeRinger } from '../utils/callRinger';
 
 const chatOrderStorageKey = (userId, listKey) => `agentChatOrder:${userId || 'anon'}:${listKey}`;
 const chatSortStorageKey = (userId) => `agentChatSort:${userId || 'anon'}`;
@@ -435,6 +436,52 @@ const onlyMessagingChats = (list) => (Array.isArray(list) ? list : []).filter(
 );
 const onlyCallShells = (list) => (Array.isArray(list) ? list : []).filter((c) => isGenesysCallShell(c));
 
+/* ── Ligação: cliente cai já conectado, então o card avisa silêncio no ar ── */
+
+const CALL_ACK_STORAGE_KEY = 'onion:calls:ack';
+
+/** Reconhecimento sobrevive a F5: recarregar não pode fazer o som voltar. */
+const loadAcknowledgedCalls = () => {
+  try {
+    const raw = sessionStorage.getItem(CALL_ACK_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(parsed) ? parsed.map(String) : []);
+  } catch (_) {
+    return new Set();
+  }
+};
+
+const saveAcknowledgedCalls = (ids) => {
+  try {
+    sessionStorage.setItem(CALL_ACK_STORAGE_KEY, JSON.stringify([...ids]));
+  } catch (_) {
+    // sessionStorage indisponível só custa o reconhecimento entre recargas.
+  }
+};
+
+const callConvId = (chat) => String(chat?.genesysConvId || chat?.externalConvId || chat?.id || '');
+
+const callStateOf = (chat) => (
+  chat?.genesysCall && typeof chat.genesysCall === 'object' ? chat.genesysCall : null
+);
+
+const CALL_STATE_LABEL = {
+  alerting: 'Chamando',
+  connected: 'Em ligação',
+  held: 'Em espera',
+  disconnected: 'Encerrada'
+};
+
+/** mm:ss a partir da âncora — nunca de contador incrementado (drifta em aba oculta). */
+const formatCallElapsed = (conectadoEm, now) => {
+  const anchor = Number(conectadoEm || 0);
+  if (!anchor) return '--:--';
+  const seconds = Math.max(0, Math.floor((now - anchor) / 1000));
+  const mm = String(Math.floor(seconds / 60)).padStart(2, '0');
+  const ss = String(seconds % 60).padStart(2, '0');
+  return `${mm}:${ss}`;
+};
+
 const loadChatOrder = (userId, listKey) => {
   try {
     const raw = localStorage.getItem(chatOrderStorageKey(userId, listKey));
@@ -623,6 +670,68 @@ const AgentWorkspace = () => {
   const [myChats, setMyChats] = useState([]);
   /** Genesys voice: cards sem mensagens (não listados no inbox de chat) */
   const [activeCalls, setActiveCalls] = useState([]);
+  const [acknowledgedCalls, setAcknowledgedCalls] = useState(loadAcknowledgedCalls);
+  const activeCallsRef = useRef([]);
+  const activeCallsLoadedRef = useRef(false);
+  const [callClockNow, setCallClockNow] = useState(() => Date.now());
+  const [ringerBlocked, setRingerBlocked] = useState(false);
+
+  // Autoplay do Chrome bloqueia som até a página receber um gesto. Sem destravar,
+  // o primeiro aviso de ligação sai mudo — justamente o que não pode falhar.
+  useEffect(() => {
+    bindRingerUnlock();
+    return subscribeRinger(({ blocked }) => setRingerBlocked(blocked));
+  }, []);
+
+  // O cliente cai já conectado: enquanto não houver reconhecimento, o número no
+  // card é tempo de silêncio no ar com alguém ouvindo do outro lado.
+  const unacknowledgedCalls = useMemo(() => activeCalls.filter((chat) => {
+    const call = callStateOf(chat);
+    if (!call || call.stale === true) return false;
+    if (!['alerting', 'connected', 'held'].includes(call.estado)) return false;
+    return !acknowledgedCalls.has(callConvId(chat));
+  }), [activeCalls, acknowledgedCalls]);
+
+  useEffect(() => {
+    if (unacknowledgedCalls.length > 0) startRinging();
+    else stopRinging();
+  }, [unacknowledgedCalls.length]);
+
+  // Para o som ao desmontar a tela, senão ele sobrevive à navegação.
+  useEffect(() => () => stopRinging(), []);
+
+  // O intervalo só provoca o render: o valor vem sempre da âncora, então aba
+  // oculta (que estrangula timers) atrasa o desenho, nunca a contagem.
+  useEffect(() => {
+    if (activeCalls.length === 0) return undefined;
+    const timer = setInterval(() => setCallClockNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [activeCalls.length]);
+
+  const acknowledgeCall = useCallback((chat) => {
+    const convId = callConvId(chat);
+    if (!convId) return;
+    setAcknowledgedCalls((previous) => {
+      if (previous.has(convId)) return previous;
+      const next = new Set(previous);
+      next.add(convId);
+      saveAcknowledgedCalls(next);
+      return next;
+    });
+  }, []);
+
+  // Reconhecimento de ligação encerrada não pode acumular no sessionStorage.
+  useEffect(() => {
+    activeCallsRef.current = activeCalls;
+    if (!activeCallsLoadedRef.current && activeCalls.length === 0) return;
+    const liveIds = new Set(activeCalls.map(callConvId).filter(Boolean));
+    setAcknowledgedCalls((previous) => {
+      const next = new Set([...previous].filter((id) => liveIds.has(id)));
+      if (next.size === previous.size) return previous;
+      saveAcknowledgedCalls(next);
+      return next;
+    });
+  }, [activeCalls]);
   const [chatSort, setChatSort] = useState(() => readChatSort(user?.id));
   const [chatSortDraft, setChatSortDraft] = useState(() => readChatSort(user?.id));
   const [draggingChatId, setDraggingChatId] = useState(null);
@@ -1570,6 +1679,7 @@ const AgentWorkspace = () => {
         const currentSelectedId = current?.id || null;
         let unreadSnapshot = unreadByChatIdRef.current;
 
+        activeCallsLoadedRef.current = true;
         setActiveCalls(activeCallsRaw);
 
         if (!unreadBootstrappedRef.current) {
@@ -1938,6 +2048,63 @@ const AgentWorkspace = () => {
       setWaitingChats(patchList);
     };
 
+    // Ligação tem evento próprio: o card de voz não passa pelo caminho de
+    // mensagens, senão messageCount sobe e ele deixa de ser call shell.
+    const handleGenesysCallState = (event) => {
+      const chatId = event?.chatId;
+      const convId = String(event?.convId || '');
+      const call = event?.call;
+      const incomingChat = event?.chat;
+      if (!call || (!chatId && !convId)) return;
+      if (incomingChat?.agentId && user?.id && String(incomingChat.agentId) !== String(user.id)) return;
+
+      const matches = (chat) => Boolean(
+        chat
+        && (
+          (chatId && chat.id === chatId)
+          || (
+            convId
+            && [chat.genesysConvId, chat.externalConvId]
+              .some((value) => String(value || '') === convId)
+          )
+        )
+      );
+
+      if (call.estado === 'disconnected') {
+        activeCallsLoadedRef.current = true;
+        setActiveCalls((list) => (Array.isArray(list) ? list : []).filter((chat) => !matches(chat)));
+        setMyChats((list) => (Array.isArray(list) ? list : []).filter((chat) => !matches(chat)));
+        setWaitingChats((list) => (Array.isArray(list) ? list : []).filter((chat) => !matches(chat)));
+        return;
+      }
+
+      activeCallsLoadedRef.current = true;
+      setMyChats((list) => (Array.isArray(list) ? list : []).filter((chat) => !matches(chat)));
+      setWaitingChats((list) => (Array.isArray(list) ? list : []).filter((chat) => !matches(chat)));
+
+      // O evento traz o chat completo: a ligação nasce direto no banner, sem
+      // esperar o refresh geral da fila (que podia custar até 1,5 segundo).
+      if (!activeCallsRef.current.some(matches) && incomingChat?.id) {
+        const nextCall = {
+          ...incomingChat,
+          genesysCall: call,
+          genesysMediaType: 'voice',
+          conversationType: 'voice',
+        };
+        setActiveCalls((list) => [
+          nextCall,
+          ...(Array.isArray(list) ? list.filter((chat) => !matches(chat)) : []),
+        ]);
+        return;
+      }
+
+      setActiveCalls((list) => (Array.isArray(list) ? list : []).map((chat) => (
+        matches(chat)
+          ? { ...chat, genesysCall: call, genesysMediaType: 'voice', conversationType: 'voice' }
+          : chat
+      )));
+    };
+
     const handleChatClosed = (event) => {
       const closedId = event?.chatId;
       const closedConvId = String(event?.convId || '');
@@ -2049,6 +2216,7 @@ const AgentWorkspace = () => {
     socketService.on('chat_updated', handleChatUpdated);
     socketService.on('chat_closed', handleChatClosed);
     socketService.on('message_delivery', handleMessageDelivery);
+    socketService.on('genesys_call_state', handleGenesysCallState);
     socketService.on('genesys_cmd_result', handleGenesysCommandResult);
     socketService.on('genesys_cmd_failed', handleGenesysCommandFailed);
 
@@ -2061,6 +2229,7 @@ const AgentWorkspace = () => {
       socketService.off('chat_updated', handleChatUpdated);
       socketService.off('chat_closed', handleChatClosed);
       socketService.off('message_delivery', handleMessageDelivery);
+      socketService.off('genesys_call_state', handleGenesysCallState);
       socketService.off('genesys_cmd_result', handleGenesysCommandResult);
       socketService.off('genesys_cmd_failed', handleGenesysCommandFailed);
       clearTimeout(refreshTimeout);
@@ -4850,27 +5019,76 @@ const AgentWorkspace = () => {
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar">
-          {activeCalls.length > 0 ? (
+          {ringerBlocked && unacknowledgedCalls.length > 0 ? (
             <div
-              className="mx-1.5 mt-1.5 mb-1 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-2 text-emerald-800 dark:border-emerald-800/50 dark:bg-emerald-900/25 dark:text-emerald-200"
-              title="Card de ligação no Genesys sem mensagens de chat — não entra na lista de conversas"
+              className="mx-1.5 mt-1.5 flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[10px] font-bold text-amber-800 dark:border-amber-700/50 dark:bg-amber-900/25 dark:text-amber-200"
+              title="O navegador bloqueia som até você interagir com a página. Clique em qualquer lugar para liberar."
             >
-              <span className="relative flex h-2 w-2 shrink-0">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-              </span>
-              <PhoneCall size={14} className="shrink-0 opacity-90" />
-              <div className="min-w-0 flex-1">
-                <div className="text-[11px] font-bold leading-tight">
-                  Ligação ativa no momento
-                  {activeCalls.length > 1 ? ` (${activeCalls.length})` : ''}
-                </div>
-                <div className="truncate text-[9px] font-medium opacity-80">
-                  Não listada no chat · só enquanto o card existir no Genesys
-                </div>
-              </div>
+              <TriangleAlert size={12} className="shrink-0" />
+              <span>Som bloqueado pelo navegador — clique na página para liberar</span>
             </div>
           ) : null}
+          {activeCalls.map((call) => {
+            const state = callStateOf(call);
+            const convId = callConvId(call);
+            const acknowledged = acknowledgedCalls.has(convId);
+            const stale = state?.stale === true;
+            const estado = state?.estado || 'connected';
+            // Sem reconhecimento, o cronômetro é tempo de silêncio no ar.
+            const pending = !acknowledged && !stale;
+            const elapsed = formatCallElapsed(state?.conectadoEm, callClockNow);
+            const tone = stale
+              ? 'border-slate-300 bg-slate-100 text-slate-500 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-400'
+              : pending
+                ? 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700/60 dark:bg-amber-900/25 dark:text-amber-100'
+                : 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800/50 dark:bg-emerald-900/25 dark:text-emerald-200';
+            return (
+              <div
+                key={call.id || convId}
+                className={`mx-1.5 mt-1.5 flex items-center gap-2 rounded-lg border px-2.5 py-2 ${tone}`}
+                title={stale
+                  ? 'Sem sinal da extensão — o cronômetro está congelado e pode não refletir a ligação real'
+                  : 'Ligação no Genesys sem mensagens de chat — não entra na lista de conversas'}
+              >
+                <span className="relative flex h-2 w-2 shrink-0">
+                  {pending ? (
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-70" />
+                  ) : null}
+                  <span className={`relative inline-flex h-2 w-2 rounded-full ${stale ? 'bg-slate-400' : pending ? 'bg-amber-500' : 'bg-emerald-500'}`} />
+                </span>
+                <PhoneCall size={14} className="shrink-0 opacity-90" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline gap-1.5 text-[11px] font-bold leading-tight">
+                    <span className="truncate">
+                      {call.customerName || state?.ani || 'Ligação'}
+                    </span>
+                    <span className="shrink-0 font-mono tabular-nums">
+                      {state?.ancoraAproximada ? `~${elapsed}` : elapsed}
+                    </span>
+                  </div>
+                  <div className="truncate text-[9px] font-medium opacity-80">
+                    {stale
+                      ? 'Sem sinal da extensão · cronômetro congelado'
+                      : `${CALL_STATE_LABEL[estado] || estado}${pending ? ' · cliente na linha te esperando' : ''}`}
+                  </div>
+                </div>
+                {pending ? (
+                  <button
+                    type="button"
+                    onClick={() => acknowledgeCall(call)}
+                    // Não atende nada no Genesys: o cliente já está conectado.
+                    // Só silencia o aviso — por isso o card segue em "Em ligação".
+                    title="Já vi esta ligação (silencia o aviso — não altera nada no Genesys)"
+                    aria-label="Já vi esta ligação"
+                    className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-500 px-2 py-1.5 text-[9px] font-bold text-white transition hover:bg-emerald-600"
+                  >
+                    <PhoneCall size={12} />
+                    <span>Confirmar</span>
+                  </button>
+                ) : null}
+              </div>
+            );
+          })}
           <section>
               {!isMobileView ? <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-slate-50/95 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.12em] text-slate-500 backdrop-blur dark:border-slate-800 dark:bg-slate-900/95 dark:text-slate-400"><span>Em atendimento</span><span className="rounded-full bg-blue-100 px-1.5 py-px text-[8px] tracking-normal text-blue-700 dark:bg-blue-900/35 dark:text-blue-300">{myChats.length}</span></div> : null}
               {myChats.length === 0 ? (

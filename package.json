@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "test:engine": "node --test tests/*.test.js",
+    "test:engine": "node --test tests/*.test.js genesys-onion-dev/tests/*.test.cjs genesys-onion-dev/tests/*.test.js",
     "start": "node index.js",
     "dev": "nodemon index.js",
     "install:mongo": "npm install mongodb",

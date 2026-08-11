@@ -8,6 +8,14 @@ import { withChatLock } from './chatLocks.js';
 import { getTenantSettings } from './tenantSettings.js';
 import { getCachedRuntimeFlow, getCachedRuntimeSchedules, getCachedRuntimeTemplates } from './flowRuntimeCache.js';
 import { CHAT_EVENT_TYPES, emitChatEvent } from './chatEvents.js';
+import {
+  GENESYS_CALL_DEFAULT_TTL_MS,
+  isGenesysCallShell,
+  isGenesysChat,
+  isGenesysEmptyShell,
+  relayHydrateGenesys
+} from './extensionAtendimento.js';
+import { getIo } from './logs.js';
 
 const normalizeWatchIntervalMs = (value) => {
   const numeric = Number(value);
@@ -16,6 +24,27 @@ const normalizeWatchIntervalMs = (value) => {
 };
 
 const WATCH_INTERVAL_MS = normalizeWatchIntervalMs(process.env.CHAT_RUNTIME_WATCHER_INTERVAL_MS);
+
+const normalizeMinutesMs = (value, fallbackMinutes, minMinutes, maxMinutes) => {
+  const numeric = Number(value);
+  const minutes = Number.isFinite(numeric) && numeric > 0 ? numeric : fallbackMinutes;
+  return Math.min(Math.max(minutes, minMinutes), maxMinutes) * 60 * 1000;
+};
+
+// Silêncio a partir do qual um espelho Genesys aberto é suspeito de ter buraco.
+const GENESYS_RECONCILE_IDLE_MS = normalizeMinutesMs(
+  process.env.GENESYS_RECONCILE_IDLE_MINUTES, 10, 2, 120
+);
+// Piso entre dois pedidos de hydrate para o mesmo chat.
+const GENESYS_RECONCILE_COOLDOWN_MS = normalizeMinutesMs(
+  process.env.GENESYS_RECONCILE_COOLDOWN_MINUTES, 15, 5, 240
+);
+const genesysReconcileLastAskedAt = new Map();
+
+// Quanto tempo um card de ligação sem sinal continua visível antes de fechar.
+const GENESYS_CALL_ZOMBIE_MS = normalizeMinutesMs(
+  process.env.GENESYS_CALL_ZOMBIE_MINUTES, 5, 1, 60
+);
 const TIMEOUT_NODE_TYPES = new Set(['inputNode', 'menuNode', 'ratingNode', 'whatsappTemplateNode', 'sequentialNode', 'holderNode']);
 let watcherStarted = false;
 let watcherTimer = null;
@@ -359,6 +388,145 @@ const handleGlobalInactivity = async (chat) => {
   });
 };
 
+/**
+ * Rede de segurança do card de ligação.
+ *
+ * O cronômetro é ancorado no cliente (`conectadoEm`), então ele continua
+ * subindo mesmo sem a extensão — um card zumbi mostra uma ligação de horas que
+ * já acabou. `expiraEm` é o antídoto: sem renovação, o card se acusa.
+ *
+ * Dois estágios de propósito. Primeiro marca `stale` (o painel congela o
+ * cronômetro e mostra "sem sinal") — reversível, porque um keepalive atrasado
+ * não deve matar ligação real. Só depois de GENESYS_CALL_ZOMBIE_MS sem
+ * nenhuma notícia é que o card fecha.
+ */
+const handleGenesysCallExpiry = async (chat) => {
+  if (!isGenesysCallShell(chat) || chat.status !== 'open') return;
+
+  const call = chat.genesysCall && typeof chat.genesysCall === 'object' ? chat.genesysCall : null;
+  // Call shell sem estado é card anterior ao contrato: sem TTL, nada a decidir.
+  if (!call || call.estado === 'disconnected') return;
+
+  const now = Date.now();
+  const expiresAt = Number(call.expiraEm)
+    || (Number(call.atualizadoEm || 0) + GENESYS_CALL_DEFAULT_TTL_MS);
+  if (!Number.isFinite(expiresAt) || now <= expiresAt) return;
+
+  const alreadyStale = call.stale === true;
+  const staleSince = Number(call.staleAt || 0);
+  // Ligação que chegou a conectar nunca fecha sozinha: se a extensão morreu no
+  // meio da conversa, o agente ainda está falando. Card congelado é
+  // recuperável, card fechado é perda. Só some o que travou em `alerting`.
+  const everConnected = Number(call.conectadoEm || 0) > 0;
+  const shouldClose = alreadyStale
+    && !everConnected
+    && staleSince > 0
+    && (now - staleSince) >= GENESYS_CALL_ZOMBIE_MS;
+  if (alreadyStale && !shouldClose) return;
+
+  let updated = null;
+  await withChatLock(chat.id, async () => {
+    const live = await adapter.getDocument('activeChats', { id: chat.id });
+    if (!live || live.status !== 'open') return;
+    const liveCall = live.genesysCall && typeof live.genesysCall === 'object' ? live.genesysCall : null;
+    if (!liveCall || liveCall.estado === 'disconnected') return;
+    // Revalida sob lock: um evento fresco entre a leitura e agora renova o TTL.
+    const liveExpiresAt = Number(liveCall.expiraEm)
+      || (Number(liveCall.atualizadoEm || 0) + GENESYS_CALL_DEFAULT_TTL_MS);
+    if (Number.isFinite(liveExpiresAt) && Date.now() <= liveExpiresAt) return;
+
+    if (shouldClose) {
+      live.genesysCall = { ...liveCall, estado: 'disconnected', stale: true };
+      live.status = 'closed';
+      live.closedAt = new Date().toISOString();
+      live.closeReason = 'genesys_ligacao_sem_sinal';
+      live.genesysMirrorPhase = 'closed';
+      live.waitingSince = null;
+    } else {
+      live.genesysCall = { ...liveCall, stale: true, staleAt: Date.now() };
+    }
+    live.updatedAt = new Date().toISOString();
+    await adapter.saveDocument('activeChats', live);
+    updated = live;
+  });
+
+  if (!updated) return;
+
+  const io = getIo();
+  if (!io || !updated.tenantId) return;
+  const room = io.to(`tenant:${updated.tenantId}`);
+  room.emit('genesys_call_state', {
+    chatId: updated.id,
+    convId: updated.genesysConvId || updated.externalConvId || null,
+    call: updated.genesysCall
+  });
+  if (shouldClose) {
+    room.emit('chat_closed', {
+      chatId: updated.id,
+      convId: updated.genesysConvId || updated.externalConvId || null,
+      motivo: 'genesys_ligacao_sem_sinal',
+      source: 'watcher'
+    });
+    console.warn('[CHAT_RUNTIME_WATCHER] ligação sem sinal encerrada', {
+      chatId: updated.id,
+      staleMs: now - staleSince
+    });
+  }
+};
+
+/**
+ * Rede de segurança do espelho Genesys.
+ *
+ * Os outboxes da extensão vivem em chrome.storage.session, que o Chrome apaga
+ * ao fechar o navegador: deltas pendentes somem sem que o app saiba. Um chat
+ * aberto, já seedado e calado há muito tempo é o sintoma disso — então o app
+ * pede à extensão um sync/watch por conta própria, em vez de esperar o agente
+ * clicar em hidratar (o buraco é invisível no card).
+ *
+ * Não força re-seed do histórico: `force: false` deixa a extensão decidir o que
+ * falta, e o dedup por messageId cobre qualquer repetição.
+ */
+const handleGenesysMirrorReconcile = async (chat) => {
+  if (!isGenesysChat(chat)) return;
+  // Só espelho vivo, já bootstrapado e com dono — hydrate exige agentId.
+  if (chat.status !== 'open' || !chat.agentId) return;
+  if (!chat.historySeeded) return;
+  // Voz/callback não tem mensagem por natureza; reconciliar seria pedir vazio pra sempre.
+  if (isGenesysEmptyShell(chat)) return;
+
+  const now = Date.now();
+  const idleMs = now - getChatActivityDate(chat).getTime();
+  if (idleMs < GENESYS_RECONCILE_IDLE_MS) return;
+
+  const lastAskedAt = Number(genesysReconcileLastAskedAt.get(chat.id) || 0);
+  if (now - lastAskedAt < GENESYS_RECONCILE_COOLDOWN_MS) return;
+  genesysReconcileLastAskedAt.set(chat.id, now);
+
+  const result = await relayHydrateGenesys({
+    chat,
+    agentId: chat.agentId,
+    force: false,
+    watch: true
+  }).catch((error) => ({ ok: false, reason: error?.message || 'relay_failed' }));
+
+  // Extensão offline é o caso comum e esperado (agente fechou o Chrome):
+  // não polui o log, e o cooldown já evita insistência.
+  if (!result?.ok && result?.reason !== 'extension_offline') {
+    console.warn('[CHAT_RUNTIME_WATCHER] reconcile Genesys falhou', {
+      chatId: chat.id,
+      reason: result?.reason || 'desconhecido'
+    });
+  }
+};
+
+const pruneGenesysReconcileState = (now = Date.now()) => {
+  for (const [chatId, askedAt] of genesysReconcileLastAskedAt) {
+    if (now - Number(askedAt || 0) > GENESYS_RECONCILE_COOLDOWN_MS * 4) {
+      genesysReconcileLastAskedAt.delete(chatId);
+    }
+  }
+};
+
 const processWatcherTick = async () => {
   if (watcherRunning) return;
   watcherRunning = true;
@@ -374,7 +542,13 @@ const processWatcherTick = async () => {
       const liveChat = await adapter.getDocument('activeChats', { id: chat.id });
       if (!liveChat || liveChat.status === 'closed') continue;
       await handleGlobalInactivity(liveChat);
+
+      const afterInactivityChat = await adapter.getDocument('activeChats', { id: chat.id });
+      if (!afterInactivityChat || afterInactivityChat.status === 'closed') continue;
+      await handleGenesysCallExpiry(afterInactivityChat);
+      await handleGenesysMirrorReconcile(afterInactivityChat);
     }
+    pruneGenesysReconcileState();
   } catch (error) {
     console.error('[CHAT_RUNTIME_WATCHER] Erro no watcher de runtime:', error?.message || error);
   } finally {
