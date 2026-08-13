@@ -196,6 +196,15 @@ test('ligação chega como card de voz sem virar mensagem e com âncora estável
   assert.match(content, /call: item\?\.call/);
   assert.match(extension, /async function processPassiveCallStates/);
   assert.match(extension, /emit\("ext:atendimento:ligacao"/);
+  // O Genesys pode publicar uma perna terminal transitória no meio da chamada.
+  // O encerramento espera confirmação curta, e qualquer sinal vivo mais novo cancela.
+  assert.match(extension, /const PASSIVE_CALL_DISCONNECT_GRACE_MS = 1800/);
+  assert.match(extension, /function schedulePassiveCallDisconnect/);
+  assert.match(extension, /Number\(current\.lastCallLiveAt \|\| 0\) > scheduledAt/);
+  assert.match(extension, /clearPendingPassiveCallDisconnect\(conversationId\)/);
+  // No desligamento, o snapshot pode perder `call` antes do card sair do DOM.
+  assert.match(extension, /state\.callUpserted && \(item\?\.agentActive === false \|\| item\?\.active === false\)/);
+  assert.match(extension, /snapshot\?\.genesysMediaType === "voice"[\s\S]*?conversations\.get\(conversationId\)\?\.callUpserted/);
   assert.match(extension, /if \(item\?\.genesysMediaType === "voice"\) return/);
   assert.match(relay, /genesys_call_state'[\s\S]*?chat: pub/);
   assert.match(workspace, /const incomingChat = event\?\.chat/);

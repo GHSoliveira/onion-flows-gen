@@ -1,6 +1,6 @@
 importScripts("external-status.js", "lib/socket.io.min.js");
 
-const EXTENSION_BUILD = "2026.08.07.3";
+const EXTENSION_BUILD = "2026.08.13.1";
 const SETTINGS_KEY = "onionDevSettings";
 const AUTH_KEY = "onionDevAuth";
 const COMMUNICATIONS_KEY = "onionDevCommunications";
@@ -104,6 +104,7 @@ const outboundMediaConversationsInFlight = new Set();
 let activeOutboundMediaUploads = 0;
 const notificationTimers = new Map();
 const notificationSnapshots = new Map();
+const passiveCallDisconnectTimers = new Map();
 const quarantinedNotificationIds = new Set();
 const manualReloadAt = new Map();
 const pendingConversationSyncs = new Set();
@@ -2256,6 +2257,11 @@ function conversationState(id) {
     observedAgentCommunicationIds: new Set(),
     callSeq: 0,
     callUpserted: false,
+    lastCall: null,
+    lastCallCustomer: null,
+    lastCallLiveAt: 0,
+    lastCallObservationAt: 0,
+    pendingCallDisconnectAt: 0,
     lastCallSignature: "",
     lastCallEmittedAt: 0,
     participantName: "",
@@ -2292,6 +2298,13 @@ function reviveClosedConversationState(conversationId, state, source = "active-e
   state.observedMissingMessageCount = 0;
   state.callSeq = 0;
   state.callUpserted = false;
+  state.lastCall = null;
+  state.lastCallCustomer = null;
+  state.lastCallLiveAt = 0;
+  state.lastCallObservationAt = 0;
+  state.pendingCallDisconnectAt = 0;
+  clearTimeout(passiveCallDisconnectTimers.get(conversationId));
+  passiveCallDisconnectTimers.delete(conversationId);
   state.lastCallSignature = "";
   state.lastCallEmittedAt = 0;
   closureSuspicions.delete(conversationId);
@@ -2512,12 +2525,98 @@ function deliverPassiveConversationToOnion(payload) {
 }
 const PASSIVE_CALL_KEEPALIVE_MS = 15000;
 const PASSIVE_CALL_TTL_MS = 60000;
+const PASSIVE_CALL_DISCONNECT_GRACE_MS = 1800;
+
+function clearPendingPassiveCallDisconnect(conversationId) {
+  clearTimeout(passiveCallDisconnectTimers.get(conversationId));
+  passiveCallDisconnectTimers.delete(conversationId);
+  const state = conversations.get(conversationId);
+  if (state) state.pendingCallDisconnectAt = 0;
+}
+
+function emitPassiveCallState(conversationId, state, call, customer, observedAt = Date.now()) {
+  const now = Number(observedAt || Date.now());
+  const estado = String(call?.estado || "").toLowerCase();
+  if (!["alerting", "connected", "held", "disconnected"].includes(estado)) return false;
+  const signature = [
+    estado,
+    Number(call?.conectadoEm || 0),
+    Number(call?.desde || 0),
+    String(call?.direcao || ""),
+    String(call?.ani || ""),
+    String(call?.dnis || "")
+  ].join("|");
+  if (
+    signature === state.lastCallSignature
+    && now - Number(state.lastCallEmittedAt || 0) < PASSIVE_CALL_KEEPALIVE_MS
+  ) return false;
+
+  state.callSeq = Number(state.callSeq || 0) + 1;
+  state.lastCallSignature = signature;
+  state.lastCallEmittedAt = now;
+  emit("ext:atendimento:ligacao", {
+    convId: conversationId,
+    syncGeneration: state.syncGeneration,
+    seq: state.callSeq,
+    estado,
+    desde: Number(call?.desde || now),
+    conectadoEm: Number(call?.conectadoEm || call?.desde || now),
+    expiraEm: now + PASSIVE_CALL_TTL_MS,
+    direcao: String(call?.direcao || ""),
+    ani: String(call?.ani || ""),
+    dnis: String(call?.dnis || ""),
+    cliente: {
+      nomeWhatsapp: String(customer?.name || state.participantName || "Ligação Genesys"),
+      name: String(customer?.name || state.participantName || "Ligação Genesys"),
+      displayName: String(customer?.name || state.participantName || "Ligação Genesys"),
+      phone: String(customer?.phone || call?.ani || "")
+    },
+    source: "genesys-passive-call",
+    environment: "dev"
+  });
+  return true;
+}
+
+function schedulePassiveCallDisconnect(conversationId, observedAt = Date.now(), reason = "terminal") {
+  const state = conversations.get(conversationId);
+  if (!state?.callUpserted || passiveCallDisconnectTimers.has(conversationId)) return;
+  const scheduledAt = Number(observedAt || Date.now());
+  if (Number(state.lastCallLiveAt || 0) > scheduledAt) return;
+  state.pendingCallDisconnectAt = scheduledAt;
+  const timer = setTimeout(() => {
+    passiveCallDisconnectTimers.delete(conversationId);
+    const current = conversations.get(conversationId);
+    if (
+      !current?.callUpserted
+      || Number(current.lastCallLiveAt || 0) > scheduledAt
+      || Number(current.pendingCallDisconnectAt || 0) !== scheduledAt
+    ) return;
+    current.pendingCallDisconnectAt = 0;
+    const previousCall = current.lastCall || {};
+    const emitted = emitPassiveCallState(
+      conversationId,
+      current,
+      { ...previousCall, estado: "disconnected", desde: scheduledAt },
+      current.lastCallCustomer,
+      Date.now()
+    );
+    current.callUpserted = false;
+    if (emitted) {
+      log("info", "Ligação encerrada por evento Genesys", `${conversationId.slice(0, 8)} · ${reason}`);
+    }
+  }, PASSIVE_CALL_DISCONNECT_GRACE_MS);
+  passiveCallDisconnectTimers.set(conversationId, timer);
+}
 
 async function processPassiveCallStates(message = {}) {
   const status = Number(message.status || 200);
   if (status < 200 || status >= 300) return;
   const conversationsToInspect = Array.isArray(message.conversations) ? message.conversations : [];
-  if (!conversationsToInspect.some((item) => item?.genesysMediaType === "voice" && item?.call)) return;
+  if (!conversationsToInspect.some((item) => {
+    const conversationId = String(item?.conversationId || "");
+    return (item?.genesysMediaType === "voice" && item?.call)
+      || (UUID_RE.test(conversationId) && conversations.get(conversationId)?.callUpserted);
+  })) return;
 
   const [cfg, credentials] = await Promise.all([settings(), auth()]);
   if (!cfg.enabled || cfg.observeNetwork === false || !credentials?.token || !socket?.connected) return;
@@ -2529,14 +2628,18 @@ async function processPassiveCallStates(message = {}) {
       const conversationId = String(item?.conversationId || "");
       const call = item?.call;
       const estado = String(call?.estado || "").toLowerCase();
-      if (
-        !UUID_RE.test(conversationId)
-        || item?.genesysMediaType !== "voice"
-        || !["alerting", "connected", "held", "disconnected"].includes(estado)
-      ) return;
+      if (!UUID_RE.test(conversationId)) return;
 
       const now = Number(message.observedAt || item?.observedAt || Date.now());
       const state = conversationState(conversationId);
+      if (now < Number(state.lastCallObservationAt || 0)) return;
+      state.lastCallObservationAt = now;
+      if (!call || !["alerting", "connected", "held", "disconnected"].includes(estado)) {
+        if (state.callUpserted && (item?.agentActive === false || item?.active === false)) {
+          schedulePassiveCallDisconnect(conversationId, now, "participante-inativo");
+        }
+        return;
+      }
       if (item?.agentActive === true) {
         reviveClosedConversationState(conversationId, state, "passive-call");
         state.observedAgentActive = true;
@@ -2550,7 +2653,20 @@ async function processPassiveCallStates(message = {}) {
         || "Ligação Genesys";
       state.participantName = customerName;
 
-      if (estado !== "disconnected" && !state.callUpserted) {
+      if (estado === "disconnected") {
+        schedulePassiveCallDisconnect(conversationId, now, "estado-disconnected");
+        return;
+      }
+
+      clearPendingPassiveCallDisconnect(conversationId);
+      state.lastCallLiveAt = now;
+      state.lastCall = { ...call, estado };
+      state.lastCallCustomer = {
+        name: customerName,
+        phone: String(item?.customerPhone || call?.ani || "")
+      };
+
+      if (!state.callUpserted) {
         const primaryClient = genesysPrimaryClientPayload({
           document: findValidDocuments(item?.customerDocument)[0] || null,
           address: item?.customerAddress,
@@ -2582,45 +2698,13 @@ async function processPassiveCallStates(message = {}) {
         state.lifecycle = "ACTIVE";
       }
 
-      if (estado === "disconnected" && !state.callUpserted && !state.upserted) return;
-      const signature = [
-        estado,
-        Number(call?.conectadoEm || 0),
-        Number(call?.desde || 0),
-        String(call?.direcao || ""),
-        String(call?.ani || ""),
-        String(call?.dnis || "")
-      ].join("|");
-      if (
-        signature === state.lastCallSignature
-        && now - Number(state.lastCallEmittedAt || 0) < PASSIVE_CALL_KEEPALIVE_MS
-      ) return;
-
-      state.callSeq = Number(state.callSeq || 0) + 1;
-      state.lastCallSignature = signature;
-      state.lastCallEmittedAt = now;
-      emit("ext:atendimento:ligacao", {
-        convId: conversationId,
-        syncGeneration: state.syncGeneration,
-        seq: state.callSeq,
-        estado,
-        desde: Number(call?.desde || now),
-        conectadoEm: Number(call?.conectadoEm || call?.desde || now),
-        expiraEm: now + PASSIVE_CALL_TTL_MS,
-        direcao: String(call?.direcao || ""),
-        ani: String(call?.ani || ""),
-        dnis: String(call?.dnis || ""),
-        cliente: {
-          nomeWhatsapp: customerName,
-          name: customerName,
-          displayName: customerName,
-          phone: String(item?.customerPhone || call?.ani || "")
-        },
-        source: "genesys-passive-call",
-        environment: "dev"
-      });
-
-      if (estado === "disconnected") state.callUpserted = false;
+      emitPassiveCallState(
+        conversationId,
+        state,
+        call,
+        state.lastCallCustomer,
+        now
+      );
     }
   );
 }
@@ -3917,8 +4001,12 @@ async function syncConversationFromNotification(conversationId) {
     if (!cfg.enabled || !credentials?.token) return;
     const notificationSnapshot = notificationSnapshots.get(conversationId);
     if (
-      notificationSnapshot?.genesysMediaType === "voice"
+      notificationSnapshot
       && Date.now() - Number(notificationSnapshot.observedAt || 0) <= NOTIFICATION_SNAPSHOT_MAX_AGE_MS
+      && (
+        notificationSnapshot.genesysMediaType === "voice"
+        || state.callUpserted
+      )
     ) {
       await processPassiveCallStates({
         status: 200,
@@ -5325,6 +5413,8 @@ async function cleanupClosedConversationState() {
     notificationSnapshots.delete(conversationId);
     clearTimeout(notificationTimers.get(conversationId));
     notificationTimers.delete(conversationId);
+    clearTimeout(passiveCallDisconnectTimers.get(conversationId));
+    passiveCallDisconnectTimers.delete(conversationId);
     pendingConversationSyncs.delete(conversationId);
     quarantinedNotificationIds.delete(conversationId);
   }
@@ -5513,7 +5603,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
     }
-    if (snapshot?.genesysMediaType === "voice") {
+    if (
+      snapshot?.genesysMediaType === "voice"
+      || conversations.get(conversationId)?.callUpserted
+    ) {
       processPassiveCallStates({
         status: 200,
         observedAt: snapshot.observedAt,
