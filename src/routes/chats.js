@@ -58,6 +58,22 @@ import { detectMime } from '../utils/fileType.js';
 
 const router = express.Router();
 const MAX_HISTORY_LIMIT = 200;
+const UNRESOLVED_AGENT_NAME_VARIABLE_RE = /\{(?:agente\.(?:nome|name)|nome_agente)\}/i;
+const LEGACY_AGENT_PLACEHOLDER_RE = new RegExp(['sandbox', 'agent'].join('\\s+'), 'i');
+const rejectUnresolvedAgentNameVariable = (text, res) => {
+  const value = String(text || '');
+  if (LEGACY_AGENT_PLACEHOLDER_RE.test(value)) {
+    res.status(422).json({
+      error: 'Mensagem bloqueada: contém um nome de agente de teste removido. Configure o nome correto antes de enviar.'
+    });
+    return true;
+  }
+  if (!UNRESOLVED_AGENT_NAME_VARIABLE_RE.test(value)) return false;
+  res.status(422).json({
+    error: 'A variável {agente.nome} está sem valor ou não foi resolvida. Configure o nome do agente antes de enviar.'
+  });
+  return true;
+};
 const genesysAiSuggestionLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: 6,
@@ -898,6 +914,7 @@ router.post('/:id/messages', authenticate, authorize(CHAT_OPERATIONAL_ROLES), re
     if (!id) {
       return res.status(400).json({ error: 'id inválido' });
     }
+    if (sender === 'agent' && rejectUnresolvedAgentNameVariable(text, res)) return;
     await withChatLock(id, async () => {
       const chat = await loadChatById(req, res, id);
       if (!chat) return;
@@ -2295,6 +2312,7 @@ router.post('/pickup-all', authenticate, authorize(CHAT_OPERATIONAL_ROLES), requ
     }
 
     const openingMessage = String(req.body?.message ?? '').trim();
+    if (rejectUnresolvedAgentNameVariable(openingMessage, res)) return;
     const waitingAll = await adapter.findDocuments('activeChats', {
       tenantId: req.tenantId,
       status: 'waiting'
@@ -2319,7 +2337,9 @@ router.post('/pickup-all', authenticate, authorize(CHAT_OPERATIONAL_ROLES), requ
           chat.agentName = req.user.name;
           chat.updatedAt = now;
           chat.waitingSince = null;
-          const pickupNotice = `O agente ${req.user.name} assumiu o atendimento.`;
+          const pickupNotice = req.user.name
+            ? `O agente ${req.user.name} assumiu o atendimento.`
+            : 'O atendimento foi assumido.';
           await sendSystemNoticeToCustomer({ chat, text: pickupNotice });
 
           await adapter.saveDocument('activeChats', chat);
@@ -2423,7 +2443,9 @@ router.post('/pickup', authenticate, authorize(CHAT_OPERATIONAL_ROLES), requireT
     chat.agentName = req.user.name;
     chat.updatedAt = new Date().toISOString();
     chat.waitingSince = null;
-    const pickupNotice = `O agente ${req.user.name} assumiu o atendimento.`;
+    const pickupNotice = req.user.name
+      ? `O agente ${req.user.name} assumiu o atendimento.`
+      : 'O atendimento foi assumido.';
 
     await adapter.saveDocument('activeChats', chat);
     await sendSystemNoticeToCustomer({ chat, text: pickupNotice });

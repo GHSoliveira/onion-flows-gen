@@ -2341,10 +2341,13 @@ const AgentWorkspace = () => {
   const handleBulkPickup = async () => {
     if (bulkPickupModal.loading) return;
     try {
+      const message = bulkPickupModal.message
+        ? renderTemplateText(bulkPickupModal.message)
+        : '';
       setBulkPickupModal((prev) => ({ ...prev, loading: true }));
       const res = await apiRequest('/chats/pickup-all', {
         method: 'POST',
-        body: JSON.stringify({ message: bulkPickupModal.message })
+        body: JSON.stringify({ message })
       });
       const data = res ? await res.json().catch(() => ({})) : {};
       if (!res || !res.ok) {
@@ -2999,9 +3002,9 @@ const AgentWorkspace = () => {
       || resolveContactNameForChat(selectedChat)
       || '';
     const builtIns = {
-      'agente.nome': user?.name || '',
-      'agente.name': user?.name || '',
-      nome_agente: user?.name || '',
+      'agente.nome': user?.name ?? null,
+      'agente.name': user?.name ?? null,
+      nome_agente: user?.name ?? null,
       saudacao: getSaudacao(),
       'saudacao.periodo': getSaudacao(),
       'cliente.nome': clienteNome,
@@ -3013,13 +3016,21 @@ const AgentWorkspace = () => {
       filial: chatVars?.filial || '',
     };
     return text.replace(/\{([\w.-]+)\}/g, (match, key) => {
-      if (builtIns[key] !== undefined && String(builtIns[key]).trim() !== '') {
-        return String(builtIns[key]);
+      if (Object.prototype.hasOwnProperty.call(builtIns, key)) {
+        const value = builtIns[key];
+        if (value !== undefined && value !== null && String(value).trim() !== '') {
+          return String(value);
+        }
+        const detail = ['agente.nome', 'agente.name', 'nome_agente'].includes(key)
+          ? 'Configure o nome do agente na engrenagem antes de usar esta mensagem.'
+          : `Preencha o dado necessário antes de usar esta mensagem.`;
+        throw new Error(`A variável {${key}} está sem valor. ${detail}`);
       }
       const value = chatVars?.[key];
-      return value !== undefined && value !== null && String(value).trim() !== ''
-        ? String(value)
-        : match;
+      if (value !== undefined && value !== null && String(value).trim() !== '') {
+        return String(value);
+      }
+      throw new Error(`A variável {${key}} está sem valor para este cliente.`);
     });
   };
 
@@ -3061,20 +3072,20 @@ const AgentWorkspace = () => {
 
   const handleSaveAgentName = async () => {
     const name = String(nameEditor.value || '').trim();
-    if (name.length < 2) return toast.error('Nome muito curto');
+    if (name && name.length < 2) return toast.error('Nome muito curto');
     setNameEditor((p) => ({ ...p, saving: true }));
     try {
       if (name !== String(user?.name || '').trim()) {
         const res = await apiRequest('/auth/me', {
           method: 'PATCH',
-          body: JSON.stringify({ name })
+          body: JSON.stringify({ name: name || null })
         });
         const data = res ? await res.json().catch(() => ({})) : null;
         if (!res || !res.ok) {
           throw new Error(data?.error || 'Falha ao salvar nome');
         }
         if (data?.user && updateUser) updateUser(data.user);
-        else if (updateUser) updateUser({ name });
+        else if (updateUser) updateUser({ name: name || null });
       }
       const normalizedAppearance = normalizeChatAppearance(appearanceDraft);
       localStorage.setItem(
@@ -3095,7 +3106,7 @@ const AgentWorkspace = () => {
       setChatSortDraft(normalizedSort);
       const preferencesResponse = await apiRequest('/auth/me/preferences', {
         method: 'PUT',
-        body: JSON.stringify({ name, appearance: normalizedAppearance, sort: normalizedSort })
+        body: JSON.stringify({ name: name || null, appearance: normalizedAppearance, sort: normalizedSort })
       });
       const preferencesData = preferencesResponse ? await preferencesResponse.json().catch(() => ({})) : null;
       if (!preferencesResponse?.ok) {
@@ -3164,10 +3175,23 @@ const AgentWorkspace = () => {
   };
 
   const handleQuickSelect = (template) => {
-    const filled = renderTemplateText(template.text || '');
-    setQuickDraft(filled);
-    setMobilePanelOpen(false);
-    setShowQuickModal(true);
+    try {
+      const filled = renderTemplateText(template.text || '');
+      setQuickDraft(filled);
+      setMobilePanelOpen(false);
+      setShowQuickModal(true);
+    } catch (error) {
+      toast.error(error?.message || 'Não foi possível preencher a mensagem rápida.');
+    }
+  };
+
+  const handleBulkTemplateSelect = (template) => {
+    try {
+      const message = renderTemplateText(template?.text || '');
+      setBulkPickupModal((previous) => ({ ...previous, message }));
+    } catch (error) {
+      toast.error(error?.message || 'Não foi possível preencher a mensagem.');
+    }
   };
 
   const handleQuickSend = async () => {
@@ -3180,7 +3204,13 @@ const AgentWorkspace = () => {
     const targetChatId = targetChat.id;
     const targetName = targetChat.customerName || 'cliente';
     const targetGx = targetChat.genesysConvId || targetChat.externalConvId || null;
-    const textToSend = quickDraft;
+    let textToSend = '';
+    try {
+      // Segunda barreira: também cobre variável digitada/colada diretamente no modal.
+      textToSend = renderTemplateText(quickDraft);
+    } catch (error) {
+      return toast.error(error?.message || 'Há uma variável sem valor nesta mensagem.');
+    }
     quickSendingRef.current = true;
     setQuickSending(true);
     try {
@@ -5699,7 +5729,7 @@ const AgentWorkspace = () => {
                         maxLength={80}
                         autoFocus
                       />
-                      <span className="mt-1 block text-[9px] text-slate-400">Usado também em {'{agente.nome}'} nas mensagens rápidas.</span>
+                      <span className="mt-1 block text-[9px] text-slate-400">Opcional. Se ficar vazio, {'{agente.nome}'} será bloqueada antes do envio.</span>
                     </label>
 
                     <section className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50/70 dark:border-slate-700 dark:bg-slate-800/45">
@@ -5905,7 +5935,7 @@ const AgentWorkspace = () => {
           </div>
         ) : null}
         {renderIxcDetailsModal()}
-        {bulkPickupModal.open ? <div className="ui-overlay-fade fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-4 backdrop-blur-sm lg:items-center" onClick={closeBulkPickupModal}><div className="ui-responsive-modal w-full max-w-2xl rounded-[28px] bg-white p-5 shadow-2xl dark:bg-slate-900" onClick={(e) => e.stopPropagation()}><div className="flex items-start justify-between gap-4"><div><h3 className="text-lg font-bold text-slate-900 dark:text-white">Puxar todos em espera</h3><p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Assume {waitingChats.length} atendimento(s) das suas filas. Escreva a primeira mensagem para todos ou deixe vazio para nao enviar nada.</p></div><button type="button" onClick={closeBulkPickupModal} disabled={bulkPickupModal.loading} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-slate-100 text-slate-600 disabled:opacity-50 dark:bg-slate-800 dark:text-slate-200"><XCircle size={18} /></button></div>{appTemplates.length > 0 ? <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/60"><div className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">Templates da aplicacao</div><div className="flex gap-2 overflow-x-auto pb-1 custom-scrollbar">{appTemplates.map((tpl) => <button key={`bulk_tpl_${tpl.id}`} type="button" onClick={() => setBulkPickupModal((prev) => ({ ...prev, message: renderTemplateText(tpl.text || '') }))} className="min-w-[180px] rounded-2xl border border-slate-200 bg-white px-3 py-2 text-left transition-colors hover:border-orange-300 hover:bg-orange-50 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-orange-700 dark:hover:bg-orange-900/20"><div className="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">{tpl.name}</div><div className="mt-1 line-clamp-2 text-xs text-slate-500 dark:text-slate-400">{tpl.text}</div></button>)}</div></div> : <div className="mt-4 rounded-2xl border border-dashed border-slate-200 px-4 py-3 text-sm text-slate-400 dark:border-slate-700">Nenhum template proprio da aplicacao encontrado.</div>}<div className="mt-4"><label className="mb-2 block text-sm font-semibold text-slate-800 dark:text-slate-100">Mensagem inicial opcional</label><textarea rows={7} value={bulkPickupModal.message} onChange={(e) => setBulkPickupModal((prev) => ({ ...prev, message: e.target.value }))} placeholder="Ex: Oi, tudo bem? Vou assumir seu atendimento por aqui. Deixe vazio para puxar sem enviar mensagem." className="min-h-[180px] w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></div><div className="mt-4 flex flex-col gap-3 sm:flex-row"><button type="button" onClick={closeBulkPickupModal} disabled={bulkPickupModal.loading} className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Cancelar</button><button type="button" onClick={handleBulkPickup} disabled={bulkPickupModal.loading || waitingChats.length === 0} className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl bg-orange-500 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-50">{bulkPickupModal.loading ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} fill="currentColor" />}{bulkPickupModal.loading ? 'Puxando...' : 'Puxar todos'}</button></div></div></div> : null}
+        {bulkPickupModal.open ? <div className="ui-overlay-fade fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-4 backdrop-blur-sm lg:items-center" onClick={closeBulkPickupModal}><div className="ui-responsive-modal w-full max-w-2xl rounded-[28px] bg-white p-5 shadow-2xl dark:bg-slate-900" onClick={(e) => e.stopPropagation()}><div className="flex items-start justify-between gap-4"><div><h3 className="text-lg font-bold text-slate-900 dark:text-white">Puxar todos em espera</h3><p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Assume {waitingChats.length} atendimento(s) das suas filas. Escreva a primeira mensagem para todos ou deixe vazio para nao enviar nada.</p></div><button type="button" onClick={closeBulkPickupModal} disabled={bulkPickupModal.loading} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-slate-100 text-slate-600 disabled:opacity-50 dark:bg-slate-800 dark:text-slate-200"><XCircle size={18} /></button></div>{appTemplates.length > 0 ? <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/60"><div className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">Templates da aplicacao</div><div className="flex gap-2 overflow-x-auto pb-1 custom-scrollbar">{appTemplates.map((tpl) => <button key={`bulk_tpl_${tpl.id}`} type="button" onClick={() => handleBulkTemplateSelect(tpl)} className="min-w-[180px] rounded-2xl border border-slate-200 bg-white px-3 py-2 text-left transition-colors hover:border-orange-300 hover:bg-orange-50 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-orange-700 dark:hover:bg-orange-900/20"><div className="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">{tpl.name}</div><div className="mt-1 line-clamp-2 text-xs text-slate-500 dark:text-slate-400">{tpl.text}</div></button>)}</div></div> : <div className="mt-4 rounded-2xl border border-dashed border-slate-200 px-4 py-3 text-sm text-slate-400 dark:border-slate-700">Nenhum template proprio da aplicacao encontrado.</div>}<div className="mt-4"><label className="mb-2 block text-sm font-semibold text-slate-800 dark:text-slate-100">Mensagem inicial opcional</label><textarea rows={7} value={bulkPickupModal.message} onChange={(e) => setBulkPickupModal((prev) => ({ ...prev, message: e.target.value }))} placeholder="Ex: Oi, tudo bem? Vou assumir seu atendimento por aqui. Deixe vazio para puxar sem enviar mensagem." className="min-h-[180px] w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-orange-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></div><div className="mt-4 flex flex-col gap-3 sm:flex-row"><button type="button" onClick={closeBulkPickupModal} disabled={bulkPickupModal.loading} className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Cancelar</button><button type="button" onClick={handleBulkPickup} disabled={bulkPickupModal.loading || waitingChats.length === 0} className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl bg-orange-500 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-50">{bulkPickupModal.loading ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} fill="currentColor" />}{bulkPickupModal.loading ? 'Puxando...' : 'Puxar todos'}</button></div></div></div> : null}
         {mediaViewer.open ? (
           <ChatMediaLightbox
             open={mediaViewer.open}

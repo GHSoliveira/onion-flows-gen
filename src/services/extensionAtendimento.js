@@ -371,7 +371,7 @@ const findChatByConvId = async ({ tenantId, convId, agentId = null }) => {
 const ensureAgentContext = (socket) => {
   const agentId = socket?.userId || null;
   const tenantId = socket?.tenantId || null;
-  const agentName = socket?.userName || 'Agente';
+  const agentName = socket?.userName || null;
   if (!agentId) {
     const err = new Error('Agente nao autenticado');
     err.code = 'AUTH';

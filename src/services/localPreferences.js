@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { normalizeAgentDisplayName } from '../utils/agentName.js';
 
 const DEFAULT_PATH = path.resolve(process.cwd(), 'data', 'onion-preferences.json');
 export const localPreferencesPath = path.resolve(process.env.ONION_PREFERENCES_PATH || DEFAULT_PATH);
@@ -39,7 +40,14 @@ const readDocument = async () => {
 
 export const getLocalPreferences = async ({ tenantId, userId }) => {
   const document = await readDocument();
-  return document.agents?.[safeKey(tenantId, userId)] || null;
+  const preferences = document.agents?.[safeKey(tenantId, userId)] || null;
+  if (!preferences) return null;
+  return {
+    ...preferences,
+    ...(Object.prototype.hasOwnProperty.call(preferences, 'name')
+      ? { name: normalizeAgentDisplayName(preferences.name) }
+      : {})
+  };
 };
 
 export const saveLocalPreferences = ({ tenantId, userId, preferences = {} }) => {
@@ -49,7 +57,7 @@ export const saveLocalPreferences = ({ tenantId, userId, preferences = {} }) => 
     const previous = document.agents?.[key] || {};
     const next = {
       ...previous,
-      ...(preferences.name !== undefined ? { name: String(preferences.name || '').trim().slice(0, 80) } : {}),
+      ...(preferences.name !== undefined ? { name: normalizeAgentDisplayName(preferences.name) } : {}),
       ...(preferences.theme !== undefined ? { theme: preferences.theme === 'dark' ? 'dark' : 'light' } : {}),
       ...(preferences.appearance !== undefined ? { appearance: cleanAppearance(preferences.appearance) } : {}),
       ...(preferences.sort !== undefined ? { sort: cleanSort(preferences.sort) } : {}),

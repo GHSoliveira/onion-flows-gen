@@ -1,5 +1,7 @@
 import bcrypt from 'bcrypt';
 import adapter from '../db/DatabaseAdapter.js';
+import { normalizeAgentDisplayName } from '../src/utils/agentName.js';
+import { getLocalPreferences } from '../src/services/localPreferences.js';
 
 const now = () => new Date().toISOString();
 
@@ -23,6 +25,22 @@ const main = async () => {
   const agentUsername = process.env.SANDBOX_AGENT_USERNAME || 'agent';
   const agentPassword = process.env.SANDBOX_AGENT_PASSWORD || 'sandbox123';
   const timestamp = now();
+  const existingAgent = await adapter.findOne(
+    'users',
+    { id: 'u_sandbox_agent' },
+    { projection: { _id: 0, name: 1 } }
+  );
+  const localPreferences = await getLocalPreferences({
+    tenantId: 'tenant_sandbox',
+    userId: 'u_sandbox_agent'
+  });
+  const savedName = localPreferences
+    && Object.prototype.hasOwnProperty.call(localPreferences, 'name')
+    ? localPreferences.name
+    : existingAgent?.name;
+  const configuredAgentName = normalizeAgentDisplayName(
+    process.env.SANDBOX_AGENT_NAME ?? savedName
+  );
 
   const tenant = {
     id: 'tenant_sandbox',
@@ -169,7 +187,7 @@ const main = async () => {
 
   const agent = {
     id: 'u_sandbox_agent',
-    name: 'Sandbox Agent',
+    name: configuredAgentName,
     username: agentUsername,
     password: await bcrypt.hash(agentPassword, 10),
     role: 'AGENT',

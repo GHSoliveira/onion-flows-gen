@@ -28,7 +28,7 @@ const Login = () => {
 
   const completeLogin = (data) => {
     login(data.user, data.token);
-    toast.success(`Bem-vindo, ${data.user.name}!`, { duration: 3000 });
+    toast.success(data.user.name ? `Bem-vindo, ${data.user.name}!` : 'Login realizado.', { duration: 3000 });
     navigate(data.user.role === 'AGENT' ? '/agent' : '/monitor');
   };
 
@@ -39,7 +39,7 @@ const Login = () => {
       brandName="Onion Flows"
       title="Acesse sua conta"
       subtitle="Use suas credenciais da equipe Onion Flows."
-      build="5.3.29"
+      build="5.3.30"
       region="Goioerê"
       transitionDuration={3600}
     />

@@ -25,6 +25,7 @@ import {
 } from './src/services/extensionAtendimento.js';
 import { registerLocalDictationHandlers } from './src/services/localDictationSocket.js';
 import { warmLocalTranscription } from './src/services/localAudioTranscription.js';
+import { normalizeAgentDisplayName } from './src/utils/agentName.js';
 
 const COMPANION_MODE_EARLY = ['1', 'true', 'yes', 'on'].includes(
   String(process.env.COMPANION_MODE || '').trim().toLowerCase()
@@ -373,7 +374,7 @@ io.use(async (socket, next) => {
     socket.userId = decoded.userId;
     socket.tenantId = user.tenantId || null;
     socket.userRole = user.role || null;
-    socket.userName = user.name || user.username || 'Agente';
+    socket.userName = normalizeAgentDisplayName(user.name);
     // Extensao Genesys: auth.client / auth.source = 'genesys-extension' | 'extension' | ...
     const clientKind = String(
       socket.handshake?.auth?.client

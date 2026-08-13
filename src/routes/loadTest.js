@@ -7,12 +7,12 @@ import { generateId } from '../utils/helpers.js';
 import { appendChatMessage, hydrateChatWithMessages } from '../services/chatMessages.js';
 import { upsertContactFromChannel } from '../services/contactIdentity.js';
 import { getIo } from '../services/logs.js';
+import { normalizeAgentDisplayName } from '../utils/agentName.js';
 
 const router = express.Router();
 
 const SANDBOX_TENANT_ID = 'tenant_sandbox';
 const SANDBOX_AGENT_ID = 'u_sandbox_agent';
-const SANDBOX_AGENT_NAME = 'Sandbox Agent';
 const SANDBOX_QUEUE = 'ATENDIMENTO';
 const SANDBOX_PHONE_NUMBER_ID = 'sandbox_phone_001';
 const MAX_SEED_MESSAGES = 200;
@@ -210,12 +210,12 @@ router.post('/seed-client', async (req, res) => {
     const statusRaw = pickString(body.status, 'open').toLowerCase();
     const status = statusRaw === 'waiting' ? 'waiting' : 'open';
 
-    let agentName = pickString(body.agentName, body.agenteNome);
+    let agentName = normalizeAgentDisplayName(pickString(body.agentName, body.agenteNome));
     if (!agentName) {
       const agent = await adapter.findOne('users', { id: agentId }, {
         projection: { _id: 0, id: 1, name: 1 }
       });
-      agentName = agent?.name || SANDBOX_AGENT_NAME;
+      agentName = normalizeAgentDisplayName(agent?.name);
     }
 
     const channelUserId = telefone || `seed${onlyDigits(cpf).slice(-8) || Date.now().toString().slice(-8)}`;

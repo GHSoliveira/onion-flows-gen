@@ -4,27 +4,35 @@ import { socketService } from '../services/socket';
 
 const AuthContext = createContext();
 const HEARTBEAT_INTERVAL_MS = Number(import.meta.env?.VITE_AUTH_HEARTBEAT_INTERVAL_MS || 60000);
+const LEGACY_AGENT_PLACEHOLDER = ['sandbox', 'agent'].join(' ');
+const normalizeUser = (value) => {
+    if (!value || typeof value !== 'object') return value;
+    const rawName = value.name === undefined || value.name === null ? '' : String(value.name).trim();
+    const name = !rawName || rawName.toLowerCase() === LEGACY_AGENT_PLACEHOLDER ? null : rawName;
+    return { ...value, name };
+};
 
 export const AuthProvider = ({ children }) => {
     const [user, setUser] = useState(() => {
         const saved = localStorage.getItem('user');
         try {
-            return saved ? JSON.parse(saved) : null;
+            return saved ? normalizeUser(JSON.parse(saved)) : null;
         } catch {
             return null;
         }
     });
 
     const login = (userData, userToken) => {
-        setUser(userData);
-        localStorage.setItem('user', JSON.stringify(userData));
+        const normalized = normalizeUser(userData);
+        setUser(normalized);
+        localStorage.setItem('user', JSON.stringify(normalized));
         localStorage.setItem('token', userToken);
     };
 
     const updateUser = (partial) => {
         setUser((prev) => {
             if (!prev) return prev;
-            const next = { ...prev, ...(partial || {}) };
+            const next = normalizeUser({ ...prev, ...(partial || {}) });
             localStorage.setItem('user', JSON.stringify(next));
             return next;
         });
@@ -58,8 +66,9 @@ export const AuthProvider = ({ children }) => {
                 if (res && res.ok) {
                     const data = await res.json();
                     if (data?.user) {
-                        setUser(data.user);
-                        localStorage.setItem('user', JSON.stringify(data.user));
+                        const normalized = normalizeUser(data.user);
+                        setUser(normalized);
+                        localStorage.setItem('user', JSON.stringify(normalized));
                     }
                 }
                 consecutiveErrors = 0;

@@ -22,6 +22,7 @@ import {
 } from '../services/loginAttemptTracker.js';
 import { noteLogin } from '../services/loginAnomalyDetector.js';
 import { getLocalPreferences, saveLocalPreferences } from '../services/localPreferences.js';
+import { normalizeAgentDisplayName } from '../utils/agentName.js';
 
 const router = express.Router();
 const HEARTBEAT_LAST_SEEN_MIN_MS = Number.parseInt(process.env.HEARTBEAT_LAST_SEEN_MIN_MS || '60000', 10);
@@ -67,6 +68,18 @@ router.post('/login', loginLimiter, async (req, res) => {
     if (!isMatch) {
       await registerLoginFailure(username);
       return res.status(401).json(invalidCredentials);
+    }
+
+    // Remove o placeholder legado antes de criar a sessão. Nome de exibição é
+    // opcional e nunca recebe username/rótulo de ambiente como fallback.
+    const normalizedName = normalizeAgentDisplayName(user.name);
+    if (normalizedName !== user.name) {
+      user.name = normalizedName;
+      await adapter.updateOne(
+        'users',
+        { id: user.id },
+        { $set: { name: normalizedName, updatedAt: new Date().toISOString() } }
+      );
     }
 
     // Sucesso — limpar contador de falhas
@@ -126,12 +139,9 @@ router.post('/logout', authenticate, async (req, res) => {
 /** Agente/admin altera o próprio nome de exibição (Meu Atendimento). */
 router.patch('/me', authenticate, async (req, res) => {
   try {
-    const name = String(req.body?.name || '').trim();
-    if (name.length < 2) {
-      return res.status(400).json({ error: 'Nome deve ter pelo menos 2 caracteres' });
-    }
-    if (name.length > 80) {
-      return res.status(400).json({ error: 'Nome muito longo' });
+    const name = normalizeAgentDisplayName(req.body?.name);
+    if (name && name.length < 2) {
+      return res.status(400).json({ error: 'Nome deve ter pelo menos 2 caracteres ou ficar vazio' });
     }
 
     const now = new Date().toISOString();
@@ -251,7 +261,7 @@ router.get('/heartbeat', authenticate, async (req, res) => {
       valid: true,
       user: {
         id: user.id,
-        name: user.name,
+        name: normalizeAgentDisplayName(stored?.name ?? user.name),
         username: user.username,
         role: user.role,
         tenantId: user.tenantId,

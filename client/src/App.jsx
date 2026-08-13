@@ -478,12 +478,12 @@ const AppContent = () => {
           <div className={`flex items-center rounded-lg border border-gray-200 bg-gray-50 dark:border-slate-700/50 dark:bg-slate-800/50 min-w-0 ${sidebarExpanded || sidebarOpen ? 'gap-2 p-2' : 'justify-center p-1.5'}`}>
             <div
               className="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold text-[11px] shadow-sm shrink-0"
-              title={user.name}
+              title={user.name || 'Nome não configurado'}
             >
-              {user.name.charAt(0).toUpperCase()}
+              {(user.name || '?').charAt(0).toUpperCase()}
             </div>
             <div className={`min-w-0 flex-1 transition-all duration-200 ${sidebarExpanded || sidebarOpen ? 'opacity-100' : 'max-w-0 opacity-0 overflow-hidden'}`}>
-              <div className="text-xs font-semibold text-slate-900 dark:text-white truncate">{user.name}</div>
+              <div className="text-xs font-semibold text-slate-900 dark:text-white truncate">{user.name || 'Sem nome'}</div>
               <div className="text-[9px] font-medium text-slate-400 uppercase tracking-wider truncate">{user.role}</div>
             </div>
           </div>

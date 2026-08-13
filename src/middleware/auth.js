@@ -2,6 +2,7 @@ import jwt from 'jsonwebtoken';
 import adapter from '../../db/DatabaseAdapter.js';
 import { JWT_SECRET_VALUE } from '../config/constants.js';
 import { totpEnrollmentGate } from './totpEnrollmentGate.js';
+import { normalizeAgentDisplayName } from '../utils/agentName.js';
 
 const ensureLegacyRootSuperAdminPermissions = async (user) => {
   const permissions = Array.isArray(user?.permissions) ? user.permissions : [];
@@ -54,7 +55,10 @@ export const authenticate = async (req, res, next) => {
       return res.status(401).json({ error: 'Usuario invalido' });
     }
 
-    const user = await ensureLegacyRootSuperAdminPermissions(storedUser);
+    const user = await ensureLegacyRootSuperAdminPermissions({
+      ...storedUser,
+      name: normalizeAgentDisplayName(storedUser.name)
+    });
     req.user = user;
     req.tokenInfo = decoded;
     // Enforcement de TOTP: para SUPER_ADMIN, força enrollment quando a flag
