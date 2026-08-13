@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "minimum_chrome_version": "111",
+  "name": "Onion Call Diagnostic",
+  "version": "0.1.0",
+  "description": "Captura local e sanitizada do ciclo de ligações no Genesys para diagnóstico.",
+  "permissions": ["storage", "tabs"],
+  "host_permissions": ["https://apps.sae1.pure.cloud/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Diagnóstico de ligação",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://apps.sae1.pure.cloud/*"],
+      "js": ["page-probe.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://apps.sae1.pure.cloud/*"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ]
+}

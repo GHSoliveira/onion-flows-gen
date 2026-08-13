@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Diagnóstico de ligação</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="panel">
+      <header>
+        <div class="mark" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div>
+          <h1>Diagnóstico de ligação</h1>
+          <p>Captura técnica local e sanitizada</p>
+        </div>
+      </header>
+
+      <section class="status-card" aria-live="polite">
+        <div class="status-line">
+          <span id="status-dot" class="dot"></span>
+          <strong id="status-label">Verificando…</strong>
+        </div>
+        <div class="metrics">
+          <span><b id="event-count">0</b> eventos</span>
+          <span id="elapsed">00:00</span>
+        </div>
+      </section>
+
+      <p id="message" class="message">
+        Abra o Genesys, inicie antes da ligação e finalize depois de desligar.
+      </p>
+
+      <button id="action" type="button" disabled>Carregando…</button>
+
+      <details>
+        <summary>O que entra no relatório?</summary>
+        <p>Cards do DOM, conversationId, participantes, calls, estados, held, horários e eventos de rede já produzidos pelo Genesys.</p>
+        <p class="safe">Não captura tokens, cookies, mensagens, CPF, nomes, telefones ou endereços.</p>
+      </details>
+
+      <footer>v0.1.0 · não faz chamadas à API</footer>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
