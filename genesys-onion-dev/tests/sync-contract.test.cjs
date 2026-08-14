@@ -107,7 +107,8 @@ test("roster autoritativo de mensagens repara cards ausentes sem perder o bloque
   assert.match(background, /\/api\/v2\/conversations\?communicationType=message&_=/);
   assert.doesNotMatch(background, /conversations\?communicationType=message&pageSize/);
   assert.match(background, /function activeGenesysMessageConversationMap\(entities\)/);
-  assert.match(background, /const missingIds = \[\.\.\.activeIds\]\.filter\(\(conversationId\) => !onionIds\.has\(conversationId\)\)/);
+  assert.match(background, /const missingIds = \[\.\.\.activeIds\]\.filter\(\(conversationId\) => !onionMessageIds\.has\(conversationId\)\)/);
+  assert.match(background, /const onionMessageIds = new Set\([\s\S]*?\.filter\(\(chat\) => !isOnionVoiceCall\(chat\)\)/);
   assert.match(background, /state\.forceSnapshot = true;[\s\S]*?scheduleNotificationSync\(conversationId, staggerMs\)/);
   assert.match(background, /function deliverConversationUpsertToOnion\(payload/);
   assert.match(background, /state\.upserted = true;[\s\S]*?resolve\(true\)/);

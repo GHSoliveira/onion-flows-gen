@@ -1,6 +1,6 @@
 importScripts("external-status.js", "lib/socket.io.min.js");
 
-const EXTENSION_BUILD = "2026.08.13.1";
+const EXTENSION_BUILD = "2026.08.14.1";
 const SETTINGS_KEY = "onionDevSettings";
 const AUTH_KEY = "onionDevAuth";
 const COMMUNICATIONS_KEY = "onionDevCommunications";
@@ -2066,6 +2066,13 @@ async function onionOpenGenesysChats() {
       && (channel === "genesys" || source === "genesys" || chat.genesysConvId || chat.externalConvId);
   });
 }
+function isOnionVoiceCall(chat = {}) {
+  const mediaType = String(
+    chat.genesysMediaType || chat.conversationType || chat.mediaType || ""
+  ).trim().toLowerCase();
+  return mediaType === "voice"
+    || (chat.genesysCall && typeof chat.genesysCall === "object");
+}
 function activeGenesysMessageConversationMap(entities) {
   const active = new Map();
   for (const conversation of (Array.isArray(entities) ? entities : [])) {
@@ -2087,8 +2094,12 @@ async function reconcileCardRoster(roster = {}) {
         .map((id) => String(id || ""))
         .filter((id) => UUID_RE.test(id))
     );
-    const onionIds = new Set(
+    // Esta auditoria consulta `communicationType=message`; portanto ela só pode
+    // reconciliar cards de mensagem. Incluir voz aqui fazia uma ligação ativa
+    // parecer excedente, ser fechada e renascer no keepalive seguinte.
+    const onionMessageIds = new Set(
       onionChats
+        .filter((chat) => !isOnionVoiceCall(chat))
         .map((chat) => String(chat.genesysConvId || chat.externalConvId || ""))
         .filter((id) => UUID_RE.test(id))
     );
@@ -2163,7 +2174,7 @@ async function reconcileCardRoster(roster = {}) {
       if (domIds.has(conversationId)) state.lastDomSeenAt = Date.now();
       closureSuspicions.delete(conversationId);
 
-      const existsInOnion = onionIds.has(conversationId);
+      const existsInOnion = onionMessageIds.has(conversationId);
       if (existsInOnion) {
         state.upserted = true;
         state.lifecycle = "ACTIVE";
@@ -2191,9 +2202,9 @@ async function reconcileCardRoster(roster = {}) {
       }
     }
 
-    const missingIds = [...activeIds].filter((conversationId) => !onionIds.has(conversationId));
+    const missingIds = [...activeIds].filter((conversationId) => !onionMessageIds.has(conversationId));
     const staleIds = authoritative && rosterComplete
-      ? [...onionIds].filter((conversationId) => !activeIds.has(conversationId))
+      ? [...onionMessageIds].filter((conversationId) => !activeIds.has(conversationId))
       : [];
 
     for (const conversationId of staleIds) {
@@ -2226,7 +2237,7 @@ async function reconcileCardRoster(roster = {}) {
     log(
       "ok",
       authoritative ? "Roster autoritativo reconciliado" : "Cards reconciliados por fallback",
-      `Genesys ${activeIds.size} · Onion ${onionIds.size} · ausentes ${missingIds.length} · excedentes ${staleIds.length}`
+      `Genesys ${activeIds.size} · Onion ${onionMessageIds.size} · ausentes ${missingIds.length} · excedentes ${staleIds.length}`
     );
   } catch (error) {
     log("error", "Falha ao reconciliar cards", error.message);

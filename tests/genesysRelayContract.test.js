@@ -257,6 +257,18 @@ test('watcher preserva ligação conectada e expira somente alerting zumbi', asy
   assert.match(watcher, /await handleGenesysCallExpiry\(afterInactivityChat\)/);
 });
 
+test('roster de mensagens nunca encerra card de ligação', async () => {
+  const background = await readFile(
+    new URL('../genesys-onion-dev/background.js', import.meta.url),
+    'utf8'
+  );
+  // A fonte autoritativa desta auditoria usa communicationType=message.
+  assert.match(background, /function isOnionVoiceCall\(chat = \{\}\)/);
+  assert.match(background, /const onionMessageIds = new Set\([\s\S]*?\.filter\(\(chat\) => !isOnionVoiceCall\(chat\)\)/);
+  assert.match(background, /const staleIds = authoritative && rosterComplete[\s\S]*?\[\.\.\.onionMessageIds\]/);
+  assert.doesNotMatch(background, /\[\.\.\.onionIds\]\.filter\(\(conversationId\) => !activeIds\.has/);
+});
+
 test('watcher reconcilia espelho Genesys calado sem forçar re-seed nem insistir', async () => {
   const watcher = await readFile(
     new URL('../src/services/chatRuntimeWatcher.js', import.meta.url),
