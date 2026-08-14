@@ -1,6 +1,6 @@
-# Onion Call Diagnostic
+# Onion Sync Diagnostic
 
-Extensão independente para capturar o ciclo técnico de uma ligação no Genesys e gerar um relatório local sanitizado.
+Extensão independente para capturar a linha do tempo técnica de chats e ligações no Genesys e gerar um relatório local sanitizado.
 
 ## Instalação
 
@@ -14,22 +14,26 @@ Ela pode permanecer instalada junto da extensão principal do Onion. Não usa o 
 
 ## Captura
 
-1. Na aba do Genesys, abra a extensão e clique em **Iniciar captura** antes da ligação.
-2. Aguarde a ligação entrar, mantenha a chamada pelo tempo necessário e desligue normalmente.
-3. Abra novamente a extensão e clique em **Finalizar e baixar relatório**.
-4. Envie o arquivo `onion-call-diagnostic-....json` inteiro para análise.
+1. Na aba do Genesys, abra a extensão e clique em **Iniciar captura** antes de um chat ou ligação entrar.
+2. Reproduza o problema: cliente ausente, mensagem atrasada, card oscilando ou ligação que desaparece.
+3. Aguarde alguns segundos depois do último evento relevante.
+4. Abra novamente a extensão e clique em **Finalizar e baixar relatório**.
+5. Envie o arquivo `onion-sync-diagnostic-....json` inteiro para análise.
 
-A captura dura no máximo 20 minutos e armazena até 4 MB ou 4.000 eventos. O arquivo informa claramente se algum limite foi atingido.
+A captura dura no máximo 20 minutos e armazena até 4 MB ou 4.000 eventos. Eventos idênticos em sequência são compactados, mantendo um heartbeat periódico. O arquivo informa claramente se algum limite foi atingido.
+
+## O que o relatório compara
+
+- cards que aparecem, mudam ou somem do DOM;
+- roster e detalhes já retornados pelo Genesys via fetch/XHR;
+- eventos de conversa já recebidos pelos WebSockets da página;
+- abertura, fechamento e reconexão dos WebSockets;
+- participantes de voz e mensagem, estados e horários;
+- `conversationId`, `participantId`, `communicationId` e IDs técnicos de mensagens;
+- lotes de mensagens solicitados e retornados, sem o conteúdo;
+- saída sanitizada produzida pelo observador da extensão principal do Onion;
+- atraso entre a primeira visão bruta, a interpretação da extensão e o DOM.
 
 ## Privacidade
 
-O relatório inclui apenas:
-
-- `conversationId`, IDs de participante e de call;
-- finalidade do participante;
-- estados, direção, `held` e horários da call;
-- nomes dos campos presentes nos objetos, sem seus valores desconhecidos;
-- entrada, saída e remontagem dos cards no DOM;
-- transporte e sequência temporal dos eventos.
-
-O relatório não inclui tokens, cookies, cabeçalhos, mensagens, CPF, nomes, telefones ou endereços. URLs têm UUIDs substituídos quando não representam o `conversationId` técnico já estruturado.
+O relatório não inclui tokens, cookies, cabeçalhos, texto de mensagens, CPF, nomes, telefones ou endereços. Para mídia, registra apenas quantidade e tipo técnico. URLs têm UUIDs substituídos quando o ID já não está em um campo técnico estruturado.

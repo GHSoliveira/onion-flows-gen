@@ -1,10 +1,12 @@
-const TOOL_VERSION = "0.1.0";
+const TOOL_VERSION = "0.2.0";
 const STORAGE_PREFIX = "onionCallDiagnostic:";
 const MAX_EVENTS = 4000;
 const MAX_CAPTURE_BYTES = 4 * 1024 * 1024;
 const MAX_CAPTURE_MS = 20 * 60 * 1000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const UUID_GLOBAL_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/ig;
+const TECH_ID_RE = /^[a-zA-Z0-9_-]{8,160}$/;
+const EVENT_HEARTBEAT_MS = 5000;
 const mutationChains = new Map();
 
 function storageKey(tabId) {
@@ -18,6 +20,11 @@ function cleanId(value) {
 
 function cleanText(value, max = 100) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+function cleanTechnicalId(value) {
+  const text = String(value || "").trim();
+  return TECH_ID_RE.test(text) ? text : "";
 }
 
 function cleanTime(value) {
@@ -63,6 +70,34 @@ function sanitizeCall(call = {}) {
   };
 }
 
+function sanitizeMessageReference(reference = {}) {
+  return {
+    id: cleanTechnicalId(reference.id || reference.messageId),
+    timestamp: cleanTime(reference.timestamp),
+    keys: cleanKeys(reference.keys)
+  };
+}
+
+function sanitizeMessageCommunication(communication = {}) {
+  return {
+    id: cleanId(communication.id),
+    state: cleanText(communication.state, 40).toLowerCase(),
+    initialState: cleanText(communication.initialState, 40).toLowerCase(),
+    direction: cleanText(communication.direction, 30).toLowerCase(),
+    held: communication.held === true,
+    startTime: cleanTime(communication.startTime),
+    connectedTime: cleanTime(communication.connectedTime),
+    disconnectedTime: cleanTime(communication.disconnectedTime),
+    endTime: cleanTime(communication.endTime),
+    directMessageId: cleanTechnicalId(communication.directMessageId),
+    messageRefs: (Array.isArray(communication.messageRefs) ? communication.messageRefs : [])
+      .slice(0, 500)
+      .map(sanitizeMessageReference)
+      .filter((item) => item.id),
+    keys: cleanKeys(communication.keys)
+  };
+}
+
 function sanitizeParticipant(participant = {}) {
   return {
     id: cleanId(participant.id),
@@ -73,6 +108,9 @@ function sanitizeParticipant(participant = {}) {
     connectedTime: cleanTime(participant.connectedTime),
     endTime: cleanTime(participant.endTime),
     calls: (Array.isArray(participant.calls) ? participant.calls : []).slice(0, 30).map(sanitizeCall),
+    messages: (Array.isArray(participant.messages) ? participant.messages : [])
+      .slice(0, 30)
+      .map(sanitizeMessageCommunication),
     keys: cleanKeys(participant.keys)
   };
 }
@@ -83,6 +121,10 @@ function sanitizeConversation(conversation = {}) {
     active: typeof conversation.active === "boolean" ? conversation.active : null,
     startTime: cleanTime(conversation.startTime),
     endTime: cleanTime(conversation.endTime),
+    mediaTypes: (Array.isArray(conversation.mediaTypes) ? conversation.mediaTypes : [])
+      .map((item) => cleanText(item, 20).toLowerCase())
+      .filter((item) => ["voice", "message"].includes(item))
+      .slice(0, 2),
     participants: (Array.isArray(conversation.participants) ? conversation.participants : [])
       .slice(0, 40)
       .map(sanitizeParticipant),
@@ -102,9 +144,74 @@ function sanitizeDomSnapshot(snapshot = {}) {
       selected: card.selected === true,
       connected: card.connected !== false,
       voiceHint: card.voiceHint === true,
+      messageHint: card.messageHint === true,
+      mediaHint: ["voice", "message", "unknown"].includes(card.mediaHint) ? card.mediaHint : "unknown",
+      iconNames: cleanKeys(card.iconNames).slice(0, 20),
       classes: cleanKeys(card.classes).slice(0, 30),
       attributeNames: cleanKeys(card.attributeNames).slice(0, 30)
     }))
+  };
+}
+
+function sanitizeMessageEntity(message = {}) {
+  return {
+    id: cleanTechnicalId(message.id),
+    direction: cleanText(message.direction, 30).toLowerCase(),
+    state: cleanText(message.state, 40).toLowerCase(),
+    type: cleanText(message.type, 50).toLowerCase(),
+    timestamp: cleanTime(message.timestamp),
+    hasText: message.hasText === true,
+    mediaCount: Math.max(0, Math.min(50, Number(message.mediaCount) || 0)),
+    mediaTypes: (Array.isArray(message.mediaTypes) ? message.mediaTypes : [])
+      .map((item) => cleanText(item, 80).toLowerCase())
+      .filter(Boolean)
+      .slice(0, 20),
+    keys: cleanKeys(message.keys),
+    normalizedKeys: cleanKeys(message.normalizedKeys)
+  };
+}
+
+function sanitizeObserverConversation(conversation = {}) {
+  return {
+    id: cleanId(conversation.id || conversation.conversationId),
+    participantIds: (Array.isArray(conversation.participantIds) ? conversation.participantIds : [])
+      .map(cleanId).filter(Boolean).slice(0, 50),
+    agentCommunicationIds: (Array.isArray(conversation.agentCommunicationIds) ? conversation.agentCommunicationIds : [])
+      .map(cleanId).filter(Boolean).slice(0, 20),
+    messageIds: (Array.isArray(conversation.messageIds) ? conversation.messageIds : [])
+      .map(cleanTechnicalId).filter(Boolean).slice(0, 500),
+    messageRefs: (Array.isArray(conversation.messageRefs) ? conversation.messageRefs : [])
+      .slice(0, 500)
+      .map((reference) => ({
+        id: cleanTechnicalId(reference?.id),
+        purpose: cleanText(reference?.purpose, 40).toLowerCase(),
+        participantId: cleanId(reference?.participantId),
+        userId: cleanId(reference?.userId),
+        senderKind: cleanText(reference?.senderKind, 40).toLowerCase()
+      }))
+      .filter((reference) => reference.id),
+    inlineMessages: (Array.isArray(conversation.inlineMessages) ? conversation.inlineMessages : [])
+      .slice(0, 500)
+      .map((message) => ({
+        id: cleanTechnicalId(message?.id),
+        sender: cleanText(message?.sender, 20).toLowerCase(),
+        senderKind: cleanText(message?.senderKind, 40).toLowerCase(),
+        senderPurpose: cleanText(message?.senderPurpose, 40).toLowerCase(),
+        senderParticipantId: cleanId(message?.senderParticipantId),
+        senderUserId: cleanId(message?.senderUserId),
+        timestamp: cleanTime(message?.timestamp),
+        hasText: message?.hasText === true,
+        hasMedia: message?.hasMedia === true
+      }))
+      .filter((message) => message.id),
+    openedAt: cleanTime(conversation.openedAt),
+    assignedAt: cleanTime(conversation.assignedAt),
+    genesysMediaType: ["voice", "message"].includes(String(conversation.genesysMediaType || "").toLowerCase())
+      ? String(conversation.genesysMediaType).toLowerCase()
+      : "",
+    callState: cleanText(conversation.callState, 30).toLowerCase(),
+    agentActive: typeof conversation.agentActive === "boolean" ? conversation.agentActive : null,
+    active: typeof conversation.active === "boolean" ? conversation.active : null
   };
 }
 
@@ -121,6 +228,7 @@ function sanitizeProbeEvent(raw = {}, sender = {}) {
     return {
       ...base,
       transport: ["websocket", "fetch", "xhr"].includes(raw.transport) ? raw.transport : "unknown",
+      routeKind: cleanText(raw.routeKind, 40),
       route: cleanText(raw.route, 300).replace(UUID_GLOBAL_RE, "{uuid}"),
       topic: cleanText(raw.topic, 300).replace(UUID_GLOBAL_RE, "{uuid}"),
       status: Math.max(0, Math.min(999, Number(raw.status) || 0)),
@@ -132,6 +240,52 @@ function sanitizeProbeEvent(raw = {}, sender = {}) {
   }
   if (kind === "dom_roster") {
     return { ...base, snapshot: sanitizeDomSnapshot(raw.snapshot) };
+  }
+  if (kind === "network_messages") {
+    return {
+      ...base,
+      transport: ["fetch", "xhr"].includes(raw.transport) ? raw.transport : "unknown",
+      route: cleanText(raw.route, 300).replace(UUID_GLOBAL_RE, "{uuid}"),
+      routeKind: "message_bulk",
+      status: Math.max(0, Math.min(999, Number(raw.status) || 0)),
+      conversationId: cleanId(raw.conversationId),
+      requestedIds: (Array.isArray(raw.requestedIds) ? raw.requestedIds : [])
+        .map(cleanTechnicalId).filter(Boolean).slice(0, 500),
+      messages: (Array.isArray(raw.messages) ? raw.messages : [])
+        .slice(0, 500)
+        .map(sanitizeMessageEntity)
+        .filter((item) => item.id)
+    };
+  }
+  if (kind === "transport_state") {
+    return {
+      ...base,
+      transport: raw.transport === "websocket" ? "websocket" : "unknown",
+      endpointKind: cleanText(raw.endpointKind, 40),
+      state: ["created", "open", "closed", "error", "snapshot"].includes(raw.state) ? raw.state : "unknown",
+      readyState: Math.max(-1, Math.min(3, Number(raw.readyState) || 0)),
+      closeCode: Math.max(0, Math.min(9999, Number(raw.closeCode) || 0)),
+      wasClean: typeof raw.wasClean === "boolean" ? raw.wasClean : null
+    };
+  }
+  if (kind === "onion_observer") {
+    return {
+      ...base,
+      observerEvent: cleanText(raw.observerEvent, 50),
+      installed: typeof raw.installed === "boolean" ? raw.installed : null,
+      schemaVersion: Math.max(0, Math.min(100, Number(raw.schemaVersion) || 0)),
+      routeKind: cleanText(raw.routeKind, 40),
+      method: cleanText(raw.method, 10).toUpperCase(),
+      status: Math.max(0, Math.min(999, Number(raw.status) || 0)),
+      transport: cleanText(raw.transport, 20).toLowerCase(),
+      conversationId: cleanId(raw.conversationId),
+      communicationId: cleanId(raw.communicationId),
+      reason: cleanText(raw.reason, 80),
+      conversations: (Array.isArray(raw.conversations) ? raw.conversations : [])
+        .slice(0, 200)
+        .map(sanitizeObserverConversation)
+        .filter((item) => item.id)
+    };
   }
   return null;
 }
@@ -165,6 +319,30 @@ function captureByteLength(capture) {
   }
 }
 
+function eventDedupKey(event) {
+  return [
+    event.kind,
+    event.frameId,
+    event.transport,
+    event.routeKind,
+    event.route,
+    event.observerEvent,
+    event.conversationId,
+    event.endpointKind
+  ].map((value) => String(value ?? "")).join("|");
+}
+
+function eventPayloadSignature(event) {
+  const stable = { ...event, at: 0, seq: 0, offsetMs: 0 };
+  const encoded = JSON.stringify(stable);
+  let hash = 2166136261;
+  for (let index = 0; index < encoded.length; index += 1) {
+    hash ^= encoded.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${encoded.length}:${hash >>> 0}`;
+}
+
 async function appendEvent(tabId, rawEvent, sender) {
   return serialMutation(tabId, async () => {
     const capture = await readCapture(tabId);
@@ -179,6 +357,19 @@ async function appendEvent(tabId, rawEvent, sender) {
     }
     const event = sanitizeProbeEvent(rawEvent, sender);
     if (!event) return { accepted: false, reason: "invalid" };
+    const dedupKey = eventDedupKey(event);
+    const payloadSignature = eventPayloadSignature(event);
+    capture.lastEventSignatures = capture.lastEventSignatures || {};
+    const previousSignature = capture.lastEventSignatures[dedupKey];
+    if (
+      previousSignature?.signature === payloadSignature
+      && event.at - Number(previousSignature.at || 0) < EVENT_HEARTBEAT_MS
+    ) {
+      capture.deduplicatedEvents = Number(capture.deduplicatedEvents || 0) + 1;
+      await writeCapture(tabId, capture);
+      return { accepted: true, deduplicated: true, count: capture.events.length };
+    }
+    capture.lastEventSignatures[dedupKey] = { signature: payloadSignature, at: event.at };
     event.seq = Number(capture.nextSeq || 1);
     event.offsetMs = Math.max(0, event.at - Number(capture.startedAt || event.at));
     capture.nextSeq = event.seq + 1;
@@ -218,8 +409,8 @@ async function setFramesActive(tabId, active, phase = "change") {
 async function startCapture(tabId, tabUrl) {
   const now = Date.now();
   const capture = {
-    schemaVersion: 1,
-    tool: "Onion Call Diagnostic",
+    schemaVersion: 2,
+    tool: "Onion Sync Diagnostic",
     toolVersion: TOOL_VERSION,
     privacy: "Sem tokens, cookies, mensagens, CPF, nomes, telefones ou enderecos.",
     active: true,
@@ -229,6 +420,8 @@ async function startCapture(tabId, tabUrl) {
     nextSeq: 1,
     truncated: false,
     droppedEvents: 0,
+    deduplicatedEvents: 0,
+    lastEventSignatures: {},
     events: []
   };
   await serialMutation(tabId, () => writeCapture(tabId, capture));
@@ -248,21 +441,75 @@ function callSignature(call) {
     .join("|");
 }
 
+function messageCommunicationSignature(communication) {
+  return [
+    communication.state,
+    communication.held,
+    communication.connectedTime,
+    communication.disconnectedTime,
+    communication.endTime,
+    (communication.messageRefs || []).map((item) => item.id).join(",")
+  ].map((value) => String(value ?? "")).join("|");
+}
+
 function buildSummary(capture) {
   const sourceCounts = {};
   const conversationIds = new Set();
   const callLastState = new Map();
   const callTransitions = [];
+  const messageLastState = new Map();
+  const messageTransitions = [];
+  const messageBatchTimeline = [];
+  const observerTimeline = [];
+  const transportTimeline = [];
+  const rosterTimeline = [];
+  const conversationDiagnostics = new Map();
   const domTimeline = [];
   let previousDomSignature = "";
+  const touchConversation = (conversationId, source, at) => {
+    const id = cleanId(conversationId);
+    if (!id) return null;
+    if (!conversationDiagnostics.has(id)) {
+      conversationDiagnostics.set(id, {
+        conversationId: id,
+        firstSeenAt: at,
+        lastSeenAt: at,
+        firstSeenBySource: {},
+        mediaTypes: new Set(),
+        participantIds: new Set(),
+        agentParticipantIds: new Set(),
+        agentCommunicationIds: new Set(),
+        messageIds: new Set()
+      });
+    }
+    const entry = conversationDiagnostics.get(id);
+    entry.firstSeenAt = Math.min(Number(entry.firstSeenAt || at), at);
+    entry.lastSeenAt = Math.max(Number(entry.lastSeenAt || at), at);
+    if (source && !entry.firstSeenBySource[source]) entry.firstSeenBySource[source] = at;
+    return entry;
+  };
   for (const event of capture.events) {
     sourceCounts[event.kind] = Number(sourceCounts[event.kind] || 0) + 1;
     if (event.kind === "network_conversations") {
       sourceCounts[event.transport] = Number(sourceCounts[event.transport] || 0) + 1;
+      if (event.routeKind === "active_roster") {
+        rosterTimeline.push({
+          at: event.at,
+          offsetMs: event.offsetMs,
+          source: `raw_${event.transport}`,
+          conversationIds: (event.conversations || []).map((item) => item.id).filter(Boolean).sort()
+        });
+      }
       for (const conversation of event.conversations || []) {
         conversationIds.add(conversation.id);
+        const diagnostic = touchConversation(conversation.id, `raw_${event.transport}`, event.at);
+        for (const mediaType of conversation.mediaTypes || []) diagnostic?.mediaTypes.add(mediaType);
         for (const participant of conversation.participants || []) {
+          if (participant.id) diagnostic?.participantIds.add(participant.id);
+          const activeAgent = participant.purpose === "agent" && participant.ended !== true;
+          if (activeAgent && participant.id) diagnostic?.agentParticipantIds.add(participant.id);
           for (const call of participant.calls || []) {
+            if (call.id && activeAgent) diagnostic?.agentCommunicationIds.add(call.id);
             const key = `${conversation.id}|${participant.id || participant.purpose}|${call.id || "sem-id"}`;
             const signature = callSignature(call);
             if (callLastState.get(key) === signature) continue;
@@ -282,8 +529,96 @@ function buildSummary(capture) {
               transport: event.transport
             });
           }
+          for (const communication of participant.messages || []) {
+            if (communication.id && activeAgent) diagnostic?.agentCommunicationIds.add(communication.id);
+            for (const reference of communication.messageRefs || []) {
+              if (reference.id) diagnostic?.messageIds.add(reference.id);
+            }
+            const key = `${conversation.id}|${participant.id || participant.purpose}|${communication.id || "sem-id"}`;
+            const signature = messageCommunicationSignature(communication);
+            if (messageLastState.get(key) === signature) continue;
+            messageLastState.set(key, signature);
+            messageTransitions.push({
+              at: event.at,
+              offsetMs: event.offsetMs,
+              conversationId: conversation.id,
+              participantId: participant.id,
+              purpose: participant.purpose,
+              communicationId: communication.id,
+              state: communication.state,
+              held: communication.held,
+              connectedTime: communication.connectedTime,
+              disconnectedTime: communication.disconnectedTime,
+              endTime: communication.endTime,
+              messageIds: (communication.messageRefs || []).map((item) => item.id),
+              transport: event.transport
+            });
+          }
         }
       }
+    }
+    if (event.kind === "network_messages") {
+      const diagnostic = touchConversation(event.conversationId, `bulk_${event.transport}`, event.at);
+      const returnedIds = (event.messages || []).map((item) => item.id).filter(Boolean);
+      returnedIds.forEach((id) => diagnostic?.messageIds.add(id));
+      const returnedSet = new Set(returnedIds);
+      messageBatchTimeline.push({
+        at: event.at,
+        offsetMs: event.offsetMs,
+        conversationId: event.conversationId,
+        transport: event.transport,
+        status: event.status,
+        requestedIds: event.requestedIds || [],
+        returnedIds,
+        missingIds: (event.requestedIds || []).filter((id) => !returnedSet.has(id)),
+        messages: event.messages || []
+      });
+    }
+    if (event.kind === "onion_observer") {
+      const ids = new Set();
+      if (event.conversationId) ids.add(event.conversationId);
+      for (const conversation of event.conversations || []) {
+        ids.add(conversation.id);
+        const diagnostic = touchConversation(conversation.id, "onion_observer", event.at);
+        if (conversation.genesysMediaType) diagnostic?.mediaTypes.add(conversation.genesysMediaType);
+        (conversation.participantIds || []).forEach((id) => diagnostic?.participantIds.add(id));
+        (conversation.agentCommunicationIds || []).forEach((id) => diagnostic?.agentCommunicationIds.add(id));
+        (conversation.messageIds || []).forEach((id) => diagnostic?.messageIds.add(id));
+        (conversation.messageRefs || []).forEach((item) => diagnostic?.messageIds.add(item.id));
+        (conversation.inlineMessages || []).forEach((item) => diagnostic?.messageIds.add(item.id));
+      }
+      for (const id of ids) touchConversation(id, "onion_observer", event.at);
+      observerTimeline.push({
+        at: event.at,
+        offsetMs: event.offsetMs,
+        observerEvent: event.observerEvent,
+        routeKind: event.routeKind,
+        transport: event.transport,
+        status: event.status,
+        installed: event.installed,
+        conversationId: event.conversationId,
+        communicationId: event.communicationId,
+        conversationIds: [...ids].sort()
+      });
+      if (event.routeKind === "active_roster") {
+        rosterTimeline.push({
+          at: event.at,
+          offsetMs: event.offsetMs,
+          source: "onion_observer",
+          conversationIds: [...ids].sort()
+        });
+      }
+    }
+    if (event.kind === "transport_state") {
+      transportTimeline.push({
+        at: event.at,
+        offsetMs: event.offsetMs,
+        endpointKind: event.endpointKind,
+        state: event.state,
+        readyState: event.readyState,
+        closeCode: event.closeCode,
+        wasClean: event.wasClean
+      });
     }
     if (event.kind === "dom_roster") {
       const ids = (event.snapshot?.cards || []).map((card) => card.conversationId).filter(Boolean).sort();
@@ -299,6 +634,7 @@ function buildSummary(capture) {
         conversationIds: ids,
         selectedConversationId: event.snapshot?.selectedConversationId || ""
       });
+      for (const id of ids) touchConversation(id, "dom", event.at);
     }
   }
   const initialDom = domTimeline.find((item) => item.phase === "initial") || domTimeline[0] || null;
@@ -307,10 +643,35 @@ function buildSummary(capture) {
     || null;
   const initialIds = new Set(initialDom?.conversationIds || []);
   const finalIds = new Set(finalDom?.conversationIds || []);
+  const diagnostics = [...conversationDiagnostics.values()].map((entry) => {
+    const rawAt = Math.min(
+      ...Object.entries(entry.firstSeenBySource)
+        .filter(([source]) => source.startsWith("raw_"))
+        .map(([, at]) => at)
+    );
+    const observerAt = Number(entry.firstSeenBySource.onion_observer || 0);
+    const domAt = Number(entry.firstSeenBySource.dom || 0);
+    return {
+      conversationId: entry.conversationId,
+      firstSeenAt: entry.firstSeenAt,
+      lastSeenAt: entry.lastSeenAt,
+      firstSeenBySource: entry.firstSeenBySource,
+      rawToObserverMs: Number.isFinite(rawAt) && observerAt ? observerAt - rawAt : null,
+      rawToDomMs: Number.isFinite(rawAt) && domAt ? domAt - rawAt : null,
+      seenByOnionObserver: Boolean(observerAt),
+      seenInDomWithConversationId: Boolean(domAt),
+      mediaTypes: [...entry.mediaTypes].sort(),
+      participantIds: [...entry.participantIds].sort(),
+      agentParticipantIds: [...entry.agentParticipantIds].sort(),
+      agentCommunicationIds: [...entry.agentCommunicationIds].sort(),
+      messageIds: [...entry.messageIds].sort()
+    };
+  }).sort((left, right) => left.firstSeenAt - right.firstSeenAt);
   return {
     durationMs: Math.max(0, Number(capture.endedAt || Date.now()) - Number(capture.startedAt || 0)),
     eventCount: capture.events.length,
     droppedEvents: Number(capture.droppedEvents || 0),
+    deduplicatedEvents: Number(capture.deduplicatedEvents || 0),
     truncated: capture.truncated === true,
     sourceCounts,
     conversationIds: [...conversationIds].sort(),
@@ -321,7 +682,13 @@ function buildSummary(capture) {
       removedConversationIds: [...initialIds].filter((id) => !finalIds.has(id)),
       timeline: domTimeline
     },
-    callTransitions
+    rosterTimeline,
+    transportTimeline,
+    observerTimeline,
+    conversationDiagnostics: diagnostics,
+    callTransitions,
+    messageTransitions,
+    messageBatchTimeline
   };
 }
 
@@ -356,7 +723,7 @@ async function stopCapture(tabId) {
     const report = buildReport(current);
     return {
       status: captureStatus(current),
-      fileName: `onion-call-diagnostic-${new Date(current.startedAt).toISOString().replace(/[:.]/g, "-")}.json`,
+      fileName: `onion-sync-diagnostic-${new Date(current.startedAt).toISOString().replace(/[:.]/g, "-")}.json`,
       reportJson: JSON.stringify(report, null, 2)
     };
   });
@@ -371,6 +738,7 @@ function captureStatus(capture) {
     endedAt: Number(capture?.endedAt || 0),
     eventCount: Array.isArray(capture?.events) ? capture.events.length : 0,
     droppedEvents: Number(capture?.droppedEvents || 0),
+    deduplicatedEvents: Number(capture?.deduplicatedEvents || 0),
     truncated: capture?.truncated === true
   };
 }

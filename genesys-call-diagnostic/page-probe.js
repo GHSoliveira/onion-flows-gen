@@ -4,6 +4,7 @@
 
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const UUID_GLOBAL_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/ig;
+  const TECH_ID_RE = /^[a-zA-Z0-9_-]{8,160}$/;
   const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
   let enabled = false;
 
@@ -14,6 +15,11 @@
 
   function cleanText(value, max = 100) {
     return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
+  }
+
+  function cleanTechnicalId(value) {
+    const text = String(value || "").trim();
+    return TECH_ID_RE.test(text) ? text : "";
   }
 
   function cleanTime(value) {
@@ -59,6 +65,32 @@
     };
   }
 
+  function sanitizeMessageReference(reference = {}) {
+    return {
+      id: cleanTechnicalId(reference.messageId || reference.id),
+      timestamp: cleanTime(reference.timestamp || reference.createdTime || reference.time),
+      keys: keysOf(reference)
+    };
+  }
+
+  function sanitizeMessageCommunication(communication = {}) {
+    const references = Array.isArray(communication.messages) ? communication.messages : [];
+    return {
+      id: cleanId(communication.id),
+      state: cleanText(communication.state, 40).toLowerCase(),
+      initialState: cleanText(communication.initialState, 40).toLowerCase(),
+      direction: cleanText(communication.direction, 30).toLowerCase(),
+      held: communication.held === true,
+      startTime: cleanTime(communication.startTime),
+      connectedTime: cleanTime(communication.connectedTime),
+      disconnectedTime: cleanTime(communication.disconnectedTime),
+      endTime: cleanTime(communication.endTime),
+      directMessageId: cleanTechnicalId(communication.messageId),
+      messageRefs: references.slice(0, 500).map(sanitizeMessageReference).filter((item) => item.id),
+      keys: keysOf(communication)
+    };
+  }
+
   function participantUserId(participant = {}) {
     const direct = cleanId(participant.userId);
     if (direct) return direct;
@@ -76,6 +108,9 @@
       connectedTime: cleanTime(participant.connectedTime),
       endTime: cleanTime(participant.endTime),
       calls: (Array.isArray(participant.calls) ? participant.calls : []).slice(0, 30).map(sanitizeCall),
+      messages: (Array.isArray(participant.messages) ? participant.messages : [])
+        .slice(0, 30)
+        .map(sanitizeMessageCommunication),
       keys: keysOf(participant)
     };
   }
@@ -87,6 +122,10 @@
     const id = cleanId(conversation?.conversationId || conversation?.id || fallbackId);
     if (!id) return null;
     const participants = Array.isArray(conversation.participants) ? conversation.participants : [];
+    const sanitizedParticipants = participants.slice(0, 40).map(sanitizeParticipant);
+    const mediaTypes = [];
+    if (sanitizedParticipants.some((participant) => participant.calls.length)) mediaTypes.push("voice");
+    if (sanitizedParticipants.some((participant) => participant.messages.length)) mediaTypes.push("message");
     return {
       id,
       active: participants.length
@@ -94,8 +133,35 @@
         : null,
       startTime: cleanTime(conversation.startTime),
       endTime: cleanTime(conversation.endTime),
-      participants: participants.slice(0, 40).map(sanitizeParticipant),
+      mediaTypes,
+      participants: sanitizedParticipants,
       keys: keysOf(conversation)
+    };
+  }
+
+  function sanitizeMessageEntity(item = {}) {
+    const normalized = item?.normalizedMessage && typeof item.normalizedMessage === "object"
+      ? item.normalizedMessage
+      : {};
+    const media = [
+      ...(Array.isArray(item.media) ? item.media : []),
+      ...(Array.isArray(normalized.media) ? normalized.media : []),
+      ...(Array.isArray(normalized.content) ? normalized.content : [])
+    ];
+    return {
+      id: cleanTechnicalId(item.id || item.messageId),
+      direction: cleanText(item.direction || normalized.direction, 30).toLowerCase(),
+      state: cleanText(item.state || item.status, 40).toLowerCase(),
+      type: cleanText(item.type || normalized.type || normalized.channel, 50).toLowerCase(),
+      timestamp: cleanTime(item.timestamp || item.createdTime || item.time),
+      hasText: Boolean(item.textBody || item.text || normalized.text || normalized.textBody),
+      mediaCount: Math.min(50, media.length),
+      mediaTypes: [...new Set(media.map((entry) => cleanText(
+        entry?.mediaType || entry?.contentType || entry?.type,
+        80
+      ).toLowerCase()).filter(Boolean))].slice(0, 20),
+      keys: keysOf(item),
+      normalizedKeys: keysOf(normalized)
     };
   }
 
@@ -128,7 +194,15 @@
 
   function observableConversationPath(path) {
     if (!/^\/api\/v2\/conversations(?:\/|$)/i.test(path)) return false;
-    return !/\/messages\/bulk$|\/communications\/|\/media\/|\/uploads(?:\/|$)/i.test(path);
+    return !/\/communications\/|\/media\/|\/uploads(?:\/|$)/i.test(path);
+  }
+
+  function routeKind(path) {
+    if (/^\/api\/v2\/conversations\/?$/i.test(path)) return "active_roster";
+    if (/\/messages\/bulk$/i.test(path)) return "message_bulk";
+    if (/^\/api\/v2\/conversations\/messages\/[0-9a-f-]{36}\/?$/i.test(path)) return "message_detail";
+    if (/^\/api\/v2\/conversations\/[0-9a-f-]{36}\/?$/i.test(path)) return "conversation_detail";
+    return "conversation_other";
   }
 
   function pagePath() {
@@ -154,11 +228,42 @@
     post({
       kind: "network_conversations",
       transport,
+      routeKind: routeKind(route),
       route: cleanText(route, 300).replace(UUID_GLOBAL_RE, "{uuid}"),
       topic: cleanText(topic, 300).replace(UUID_GLOBAL_RE, "{uuid}"),
       status,
       conversations
     });
+  }
+
+  function publishMessageBatch({ transport, route = "", status = 0, payload, requestedIds = [] }) {
+    const conversationId = routeConversationId(route);
+    if (!conversationId) return;
+    const candidates = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.entities)
+        ? payload.entities
+        : [];
+    post({
+      kind: "network_messages",
+      transport,
+      route: cleanText(route, 300).replace(UUID_GLOBAL_RE, "{uuid}"),
+      routeKind: "message_bulk",
+      status,
+      conversationId,
+      requestedIds: requestedIds.map(cleanTechnicalId).filter(Boolean).slice(0, 500),
+      messages: candidates.slice(0, 500).map(sanitizeMessageEntity).filter((item) => item.id)
+    });
+  }
+
+  function parseRequestedMessageIds(body) {
+    if (typeof body !== "string" || body.length > 100000) return [];
+    try {
+      const parsed = JSON.parse(body);
+      return (Array.isArray(parsed) ? parsed : []).map(cleanTechnicalId).filter(Boolean).slice(0, 500);
+    } catch (_) {
+      return [];
+    }
   }
 
   function parseSocketData(data) {
@@ -210,12 +315,46 @@
     }
   }
 
+  const socketRegistry = new Set();
+  function socketEndpointKind(url) {
+    try {
+      const parsed = new URL(String(url || ""));
+      if (parsed.hostname.startsWith("streaming.")) return parsed.pathname.startsWith("/stream/")
+        ? "streaming_xmpp"
+        : "streaming_notifications";
+      if (parsed.hostname.startsWith("realtime.")) return "realtime_socketio";
+      return "other";
+    } catch (_) {
+      return "unknown";
+    }
+  }
+
+  function publishSocketState(socket, state, event = {}) {
+    post({
+      kind: "transport_state",
+      transport: "websocket",
+      endpointKind: socketEndpointKind(socket?.url),
+      state,
+      readyState: Number(socket?.readyState ?? -1),
+      closeCode: state === "closed" ? Number(event?.code || 0) : 0,
+      wasClean: state === "closed" ? event?.wasClean === true : null
+    });
+  }
+
   const NativeWebSocket = window.WebSocket;
   if (typeof NativeWebSocket === "function") {
     function DiagnosticWebSocket(url, protocols) {
       const socket = protocols === undefined
         ? new NativeWebSocket(url)
         : new NativeWebSocket(url, protocols);
+      socketRegistry.add(socket);
+      publishSocketState(socket, "created");
+      socket.addEventListener("open", (event) => publishSocketState(socket, "open", event));
+      socket.addEventListener("close", (event) => {
+        publishSocketState(socket, "closed", event);
+        socketRegistry.delete(socket);
+      });
+      socket.addEventListener("error", (event) => publishSocketState(socket, "error", event));
       socket.addEventListener("message", (event) => inspectSocketMessage(event.data));
       return socket;
     }
@@ -241,13 +380,23 @@
               if (!text || text.length > MAX_RESPONSE_BYTES) return;
               let payload;
               try { payload = JSON.parse(text); } catch (_) { return; }
-              publishNetwork({
-                transport: "fetch",
-                route: path,
-                status: response.status,
-                payload,
-                fallbackId: routeConversationId(path)
-              });
+              if (routeKind(path) === "message_bulk") {
+                publishMessageBatch({
+                  transport: "fetch",
+                  route: path,
+                  status: response.status,
+                  payload,
+                  requestedIds: parseRequestedMessageIds(init?.body)
+                });
+              } else {
+                publishNetwork({
+                  transport: "fetch",
+                  route: path,
+                  status: response.status,
+                  payload,
+                  fallbackId: routeConversationId(path)
+                });
+              }
             }).catch(() => {});
           }
         }
@@ -263,6 +412,7 @@
     return nativeOpen.apply(this, arguments);
   };
   XMLHttpRequest.prototype.send = function diagnosticSend() {
+    this.__onionCallDiagnosticRequestedIds = parseRequestedMessageIds(arguments[0]);
     if (!this.__onionCallDiagnosticListener) {
       this.__onionCallDiagnosticListener = true;
       this.addEventListener("loadend", () => {
@@ -280,13 +430,23 @@
         if (!text || text.length > MAX_RESPONSE_BYTES) return;
         let payload;
         try { payload = JSON.parse(text); } catch (_) { return; }
-        publishNetwork({
-          transport: "xhr",
-          route: path,
-          status: Number(this.status || 0),
-          payload,
-          fallbackId: routeConversationId(path)
-        });
+        if (routeKind(path) === "message_bulk") {
+          publishMessageBatch({
+            transport: "xhr",
+            route: path,
+            status: Number(this.status || 0),
+            payload,
+            requestedIds: this.__onionCallDiagnosticRequestedIds
+          });
+        } else {
+          publishNetwork({
+            transport: "xhr",
+            route: path,
+            status: Number(this.status || 0),
+            payload,
+            fallbackId: routeConversationId(path)
+          });
+        }
       });
     }
     return nativeSend.apply(this, arguments);
@@ -296,5 +456,8 @@
     if (message.source !== window) return;
     if (message.data?.source !== "onion-call-diagnostic-control") return;
     enabled = message.data.enabled === true;
+    if (enabled) {
+      for (const socket of socketRegistry) publishSocketState(socket, "snapshot");
+    }
   });
 })();

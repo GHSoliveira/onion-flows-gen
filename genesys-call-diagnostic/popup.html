@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Diagnóstico de ligação</title>
+    <title>Diagnóstico de sincronização</title>
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
@@ -11,7 +11,7 @@
       <header>
         <div class="mark" aria-hidden="true"><span></span><span></span><span></span></div>
         <div>
-          <h1>Diagnóstico de ligação</h1>
+          <h1>Diagnóstico de sincronização</h1>
           <p>Captura técnica local e sanitizada</p>
         </div>
       </header>
@@ -28,18 +28,18 @@
       </section>
 
       <p id="message" class="message">
-        Abra o Genesys, inicie antes da ligação e finalize depois de desligar.
+        Inicie antes de um chat ou ligação entrar e finalize após reproduzir o problema.
       </p>
 
       <button id="action" type="button" disabled>Carregando…</button>
 
       <details>
         <summary>O que entra no relatório?</summary>
-        <p>Cards do DOM, conversationId, participantes, calls, estados, held, horários e eventos de rede já produzidos pelo Genesys.</p>
+        <p>Cards do DOM, roster, conversationId, participantes, communications, IDs técnicos de mensagens, estados, horários, WebSockets e interpretação da extensão Onion.</p>
         <p class="safe">Não captura tokens, cookies, mensagens, CPF, nomes, telefones ou endereços.</p>
       </details>
 
-      <footer>v0.1.0 · não faz chamadas à API</footer>
+      <footer>v0.2.0 · não faz chamadas à API</footer>
     </main>
     <script src="popup.js"></script>
   </body>

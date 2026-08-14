@@ -1,16 +1,16 @@
 {
   "manifest_version": 3,
   "minimum_chrome_version": "111",
-  "name": "Onion Call Diagnostic",
-  "version": "0.1.0",
-  "description": "Captura local e sanitizada do ciclo de ligações no Genesys para diagnóstico.",
+  "name": "Onion Sync Diagnostic",
+  "version": "0.2.0",
+  "description": "Captura local e sanitizada da sincronização de chats e ligações no Genesys.",
   "permissions": ["storage", "tabs"],
   "host_permissions": ["https://apps.sae1.pure.cloud/*"],
   "background": {
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "Diagnóstico de ligação",
+    "default_title": "Diagnóstico de sincronização",
     "default_popup": "popup.html"
   },
   "content_scripts": [

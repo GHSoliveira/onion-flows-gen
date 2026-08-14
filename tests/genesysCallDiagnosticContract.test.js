@@ -12,8 +12,8 @@ async function source(name) {
 
 test('extensao de diagnostico e independente e nao ganha acesso a segredos', async () => {
   const manifest = JSON.parse(await source('manifest.json'));
-  assert.equal(manifest.name, 'Onion Call Diagnostic');
-  assert.equal(manifest.version, '0.1.0');
+  assert.equal(manifest.name, 'Onion Sync Diagnostic');
+  assert.equal(manifest.version, '0.2.0');
   assert.deepEqual(manifest.permissions.sort(), ['storage', 'tabs']);
   assert.deepEqual(manifest.host_permissions, ['https://apps.sae1.pure.cloud/*']);
   for (const forbidden of ['cookies', 'debugger', 'downloads', 'webRequest', 'webRequestBlocking']) {
@@ -30,8 +30,12 @@ test('probe observa transporte existente sem criar chamada adicional ao Genesys'
   assert.match(probe, /response\.clone\(\)\.text\(\)/);
   assert.match(probe, /this\.addEventListener\("loadend"/);
   assert.match(probe, /const response = await nativeFetch\.apply\(this, arguments\)/);
+  assert.match(probe, /kind: "network_messages"/);
+  assert.match(probe, /kind: "transport_state"/);
+  assert.match(probe, /requestedIds: parseRequestedMessageIds/);
+  assert.match(probe, /hasText: Boolean/);
   assert.doesNotMatch(probe, /authorization|cookie|headers\s*:/i);
-  assert.doesNotMatch(probe, /textBody|normalizedMessage|messageText/);
+  assert.doesNotMatch(probe, /text:\s*cleanText|textBody:\s*|messageText:\s*/);
 });
 
 test('relatorio e limitado, sanitizado e sobrevive a suspensao do service worker', async () => {
@@ -42,9 +46,17 @@ test('relatorio e limitado, sanitizado e sobrevive a suspensao do service worker
   assert.match(background, /chrome\.storage\.session\.set/);
   assert.match(background, /function sanitizeCall/);
   assert.match(background, /function sanitizeParticipant/);
+  assert.match(background, /function sanitizeMessageCommunication/);
+  assert.match(background, /function sanitizeMessageEntity/);
+  assert.match(background, /function sanitizeObserverConversation/);
   assert.match(background, /function sanitizeDomSnapshot/);
   assert.match(background, /replace\(UUID_GLOBAL_RE, "\{uuid\}"\)/);
   assert.match(background, /callTransitions/);
+  assert.match(background, /messageTransitions/);
+  assert.match(background, /messageBatchTimeline/);
+  assert.match(background, /conversationDiagnostics/);
+  assert.match(background, /rawToObserverMs/);
+  assert.match(background, /EVENT_HEARTBEAT_MS = 5000/);
   assert.match(background, /addedConversationIds/);
   assert.match(background, /removedConversationIds/);
   assert.match(background, /Recarregue a página do Genesys e tente novamente/);
@@ -59,6 +71,9 @@ test('captura usa dois cliques e baixa JSON local', async () => {
   assert.match(popup, /new Blob\(\[reportJson\]/);
   assert.match(content, /phase: "initial"|sendDomSnapshot\(phase, true\)/);
   assert.match(content, /MutationObserver/);
+  assert.match(content, /onion-dev-network-observation/);
+  assert.match(content, /observerEvent: "communication_candidate"/);
+  assert.match(content, /mediaHint/);
   assert.doesNotMatch(content, /innerText|textContent/);
 });
 

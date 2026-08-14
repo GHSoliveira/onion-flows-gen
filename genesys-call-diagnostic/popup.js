@@ -45,7 +45,7 @@ function render() {
     actionButton.textContent = busy ? "Gerando relatório…" : "Finalizar e baixar relatório";
     actionButton.classList.add("stop");
     actionButton.disabled = busy;
-    setMessage("Desligue a ligação e clique aqui. Não feche nem atualize esta aba antes do download.");
+    setMessage("Reproduza o problema de chat ou ligação e finalize. Não feche nem atualize esta aba antes do download.");
     return;
   }
   if (status.exists) {
@@ -55,13 +55,13 @@ function render() {
     actionButton.disabled = busy;
     setMessage(status.truncated
       ? "O limite seguro foi atingido; o relatório anterior sinalizou eventos descartados."
-      : "Pronto para substituir a captura anterior e registrar uma nova ligação.");
+      : "Pronto para substituir a captura anterior e registrar uma nova sincronização.");
     return;
   }
   statusLabel.textContent = "Pronto";
   actionButton.textContent = busy ? "Iniciando…" : "Iniciar captura";
   actionButton.disabled = busy;
-  setMessage("Clique antes da ligação. A captura acompanha os eventos até você finalizar.");
+  setMessage("Clique antes do chat ou ligação entrar. A captura acompanha os eventos até você finalizar.");
 }
 
 async function refreshStatus() {

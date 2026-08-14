@@ -3,12 +3,77 @@
   window.__onionCallDiagnosticContent = true;
 
   const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+  const UUID_EXACT_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const TECH_ID_RE = /^[a-zA-Z0-9_-]{8,160}$/;
   const CARD_SELECTOR = ".interaction-group, .acd-interaction-card-v2";
   const SELECTED_SELECTOR = ".interaction-group.is-selected, .acd-interaction-card-v2.is-selected";
   const HEADER_SELECTOR = "#interaction-header-participant-name, gux-truncate[class*='displayName']";
   let active = false;
   let domTimer = 0;
   let lastDomSignature = "";
+
+  function cleanId(value) {
+    const text = String(value || "").trim();
+    return UUID_EXACT_RE.test(text) ? text : "";
+  }
+
+  function cleanTechnicalId(value) {
+    const text = String(value || "").trim();
+    return TECH_ID_RE.test(text) ? text : "";
+  }
+
+  function cleanTime(value) {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    const text = String(value || "").trim();
+    return /^\d{4}-\d{2}-\d{2}T/.test(text) ? text.slice(0, 50) : "";
+  }
+
+  function safeReason(value) {
+    return String(value || "").replace(/[^a-zA-Z0-9_.:-]/g, "").slice(0, 80);
+  }
+
+  function sanitizeOnionObserverConversation(item = {}) {
+    return {
+      id: cleanId(item.conversationId || item.id),
+      participantIds: (Array.isArray(item.participantIds) ? item.participantIds : [])
+        .map(cleanId).filter(Boolean).slice(0, 50),
+      agentCommunicationIds: (Array.isArray(item.agentCommunicationIds) ? item.agentCommunicationIds : [])
+        .map(cleanId).filter(Boolean).slice(0, 20),
+      messageIds: (Array.isArray(item.messageIds) ? item.messageIds : [])
+        .map(cleanTechnicalId).filter(Boolean).slice(0, 500),
+      messageRefs: (Array.isArray(item.messageRefs) ? item.messageRefs : []).slice(0, 500).map((reference) => ({
+        id: cleanTechnicalId(reference?.id),
+        purpose: safeReason(reference?.purpose),
+        participantId: cleanId(reference?.participantId),
+        userId: cleanId(reference?.userId),
+        senderKind: safeReason(reference?.senderKind)
+      })).filter((reference) => reference.id),
+      inlineMessages: (Array.isArray(item.messages) ? item.messages : []).slice(0, 500).map((message) => ({
+        id: cleanTechnicalId(message?.id),
+        sender: safeReason(message?.sender),
+        senderKind: safeReason(message?.senderKind),
+        senderPurpose: safeReason(message?.senderPurpose),
+        senderParticipantId: cleanId(message?.senderParticipantId),
+        senderUserId: cleanId(message?.senderUserId),
+        timestamp: cleanTime(message?.ts),
+        hasText: Boolean(message?.text),
+        hasMedia: message?.hasMedia === true
+      })).filter((message) => message.id),
+      openedAt: cleanTime(item.openedAt),
+      assignedAt: cleanTime(item.assignedAt),
+      genesysMediaType: ["voice", "message"].includes(String(item.genesysMediaType || "").toLowerCase())
+        ? String(item.genesysMediaType).toLowerCase()
+        : "",
+      callState: safeReason(item?.call?.estado),
+      agentActive: typeof item.agentActive === "boolean" ? item.agentActive : null,
+      active: typeof item.active === "boolean" ? item.active : null
+    };
+  }
+
+  function emitDiagnosticEvent(event) {
+    if (!active || !event || typeof event !== "object") return;
+    chrome.runtime.sendMessage({ type: "CALL_DIAG_EVENT", event }).catch(() => {});
+  }
 
   function setProbeEnabled(value) {
     active = value === true;
@@ -53,12 +118,24 @@
         .map((node) => node.className || "")
         .join(" ")}`.toLowerCase();
       const domId = /^ember\d+$/i.test(String(card.id || "")) ? String(card.id) : "";
+      const iconNames = [...card.querySelectorAll("gux-icon, [icon-name], [name]")]
+        .map((node) => node.getAttribute("icon-name") || node.getAttribute("name") || "")
+        .map((value) => String(value).trim().toLowerCase())
+        .filter((value) => /^[a-z0-9_-]{2,60}$/.test(value))
+        .slice(0, 20);
+      const voiceHint = /(?:^|[-_ ])(?:call|voice|phone|telefone)(?:$|[-_ ])/.test(searchable)
+        || iconNames.some((name) => /phone|call|voice/.test(name));
+      const messageHint = /(?:^|[-_ ])(?:message|messaging|chat)(?:$|[-_ ])/.test(searchable)
+        || iconNames.some((name) => /message|chat/.test(name));
       return {
         conversationId: conversationIdFromCard(card),
         domId,
         selected: card.matches(SELECTED_SELECTOR) || card.classList.contains("is-selected"),
         connected: card.isConnected,
-        voiceHint: /(?:^|[-_ ])(?:call|voice|phone|telefone)(?:$|[-_ ])/.test(searchable),
+        voiceHint,
+        messageHint,
+        mediaHint: voiceHint ? "voice" : messageHint ? "message" : "unknown",
+        iconNames,
         classes: [...card.classList].slice(0, 30),
         attributeNames: [...card.attributes].map((attribute) => attribute.name).slice(0, 30)
       };
@@ -88,33 +165,35 @@
         card.domId,
         card.selected,
         card.connected,
-        card.voiceHint
+        card.mediaHint,
+        card.iconNames
       ])
     });
     if (!force && signature === lastDomSignature) return;
     lastDomSignature = signature;
-    chrome.runtime.sendMessage({
-      type: "CALL_DIAG_EVENT",
-      event: {
-        at: Date.now(),
-        kind: "dom_roster",
-        frame: "top",
-        page: `${location.origin}${location.pathname}`,
-        snapshot
-      }
-    }).catch(() => {});
+    emitDiagnosticEvent({
+      at: Date.now(),
+      kind: "dom_roster",
+      frame: "top",
+      page: `${location.origin}${location.pathname}`,
+      snapshot
+    });
   }
 
   function scheduleDomSnapshot() {
     if (!active || window !== window.top) return;
-    clearTimeout(domTimer);
-    domTimer = setTimeout(() => sendDomSnapshot("change"), 100);
+    if (domTimer) return;
+    domTimer = setTimeout(() => {
+      domTimer = 0;
+      sendDomSnapshot("change");
+    }, 25);
   }
 
   function applyCaptureState(nextActive, phase = "change") {
     setProbeEnabled(nextActive);
     if (!nextActive) {
       clearTimeout(domTimer);
+      domTimer = 0;
       return;
     }
     if (document.readyState === "loading") {
@@ -126,13 +205,76 @@
 
   window.addEventListener("message", (message) => {
     if (!active || message.source !== window) return;
-    if (message.data?.source !== "onion-call-diagnostic-probe") return;
-    const event = message.data.event;
-    if (!event || typeof event !== "object") return;
-    let encoded = "";
-    try { encoded = JSON.stringify(event); } catch (_) { return; }
-    if (!encoded || encoded.length > 350000) return;
-    chrome.runtime.sendMessage({ type: "CALL_DIAG_EVENT", event }).catch(() => {});
+    const data = message.data || {};
+    if (data.source === "onion-call-diagnostic-probe") {
+      const event = data.event;
+      if (!event || typeof event !== "object") return;
+      let encoded = "";
+      try { encoded = JSON.stringify(event); } catch (_) { return; }
+      if (!encoded || encoded.length > 350000) return;
+      emitDiagnosticEvent(event);
+      return;
+    }
+    if (data.source === "onion-dev-network-observation-health") {
+      emitDiagnosticEvent({
+        at: Date.now(),
+        kind: "onion_observer",
+        observerEvent: "health",
+        installed: data.installed === true,
+        schemaVersion: Number(data.schemaVersion || 0)
+      });
+      return;
+    }
+    if (data.source === "onion-dev-network-observation") {
+      emitDiagnosticEvent({
+        at: Number(data.observedAt || Date.now()),
+        kind: "onion_observer",
+        observerEvent: "network_observation",
+        schemaVersion: Number(data.schemaVersion || 0),
+        routeKind: safeReason(data.routeKind),
+        method: safeReason(data.method),
+        status: Number(data.status || 0),
+        transport: safeReason(data.transport),
+        conversations: (Array.isArray(data.conversations) ? data.conversations : [])
+          .slice(0, 200)
+          .map(sanitizeOnionObserverConversation)
+          .filter((item) => item.id)
+      });
+      return;
+    }
+    if (data.source === "onion-dev-conversation-notification") {
+      emitDiagnosticEvent({
+        at: Number(data.observedAt || Date.now()),
+        kind: "onion_observer",
+        observerEvent: "conversation_notification",
+        schemaVersion: Number(data.schemaVersion || 0),
+        conversationId: cleanId(data.conversationId),
+        conversations: data.conversation
+          ? [sanitizeOnionObserverConversation(data.conversation)].filter((item) => item.id)
+          : []
+      });
+      return;
+    }
+    if (data.source === "onion-dev-communication") {
+      emitDiagnosticEvent({
+        at: Date.now(),
+        kind: "onion_observer",
+        observerEvent: "communication_candidate",
+        conversationId: cleanId(data.conversationId),
+        communicationId: cleanId(data.communicationId),
+        reason: safeReason(data.reason)
+      });
+      return;
+    }
+    if (data.source === "onion-dev-focus") {
+      emitDiagnosticEvent({
+        at: Date.now(),
+        kind: "onion_observer",
+        observerEvent: "focus_candidate",
+        conversationId: cleanId(data.conversationId),
+        reason: safeReason(data.reason)
+      });
+    }
   });
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
