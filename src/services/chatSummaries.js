@@ -37,6 +37,7 @@ export const buildChatSummary = (chat) => {
     channelChatId: chat?.channelChatId || null,
     createdAt: chat?.createdAt || null,
     genesysStartedAt: chat?.genesysStartedAt || null,
+    genesysAssignedAt: chat?.genesysAssignedAt || null,
     updatedAt: chat?.updatedAt || null,
     waitingSince: chat?.waitingSince || null,
     vars: chat?.vars || {},

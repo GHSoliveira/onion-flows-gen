@@ -336,6 +336,7 @@ const CHAT_SUMMARY_PROJECTION = {
   whatsappPhoneNumberId: 1,
   createdAt: 1,
   genesysStartedAt: 1,
+  genesysAssignedAt: 1,
   updatedAt: 1,
   closedAt: 1,
   waitingSince: 1,

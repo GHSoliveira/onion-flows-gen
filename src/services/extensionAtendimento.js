@@ -413,6 +413,9 @@ const handleExtUpsertUnlocked = async (socket, payload = {}) => {
   const abertoEm = payload.abertoEm !== undefined
     ? toIsoFromTs(payload.abertoEm)
     : null;
+  const atribuidoEm = payload.atribuidoEm !== undefined
+    ? toIsoFromTs(payload.atribuidoEm)
+    : null;
   const now = new Date().toISOString();
 
   let chat = await findChatByConvId({ tenantId, convId, agentId });
@@ -446,6 +449,7 @@ const handleExtUpsertUnlocked = async (socket, payload = {}) => {
       // Chave primária do espelho — não muda depois
       genesysConvId: convId,
       genesysCommunicationId: communicationId || null,
+      genesysAssignmentCommunicationId: communicationId || null,
       genesysSyncGeneration: syncGeneration || null,
       externalConvId: convId,
       externalSource: 'genesys',
@@ -469,6 +473,7 @@ const handleExtUpsertUnlocked = async (socket, payload = {}) => {
       currentNodeId: null,
       processedMessageIds: [],
       genesysStartedAt: abertoEm || now,
+      genesysAssignedAt: atribuidoEm || now,
       createdAt: abertoEm || now,
       updatedAt: now,
       secureVars: {},
@@ -490,6 +495,7 @@ const handleExtUpsertUnlocked = async (socket, payload = {}) => {
     };
   } else {
     // UPDATE: genesysConvId já fixo — não reescreve para outro id
+    const previousAssignmentCommunicationId = pickString(chat.genesysAssignmentCommunicationId);
     if (!chat.genesysConvId) chat.genesysConvId = convId;
     if (!chat.externalConvId) chat.externalConvId = convId;
     if (communicationId) chat.genesysCommunicationId = communicationId;
@@ -513,6 +519,53 @@ const handleExtUpsertUnlocked = async (socket, payload = {}) => {
       } else if (!chat.genesysStartedAt && Number.isFinite(currentStartMs) && currentStartMs > 0) {
         chat.genesysStartedAt = new Date(currentStartMs).toISOString();
       }
+    }
+
+    if (atribuidoEm) {
+      const incomingAssignmentMs = new Date(atribuidoEm).getTime();
+      const currentAssignmentMs = new Date(chat.genesysAssignedAt || 0).getTime();
+      let assignmentAccepted = false;
+      const firstKnownAssignmentCommunication = Boolean(
+        communicationId
+        && !previousAssignmentCommunicationId
+      );
+      const sameAssignmentCommunication = Boolean(
+        communicationId
+        && communicationId === previousAssignmentCommunicationId
+      );
+      const newerAssignmentCommunication = Boolean(
+        communicationId
+        && previousAssignmentCommunicationId
+        && communicationId !== previousAssignmentCommunicationId
+        && incomingAssignmentMs > currentAssignmentMs
+      );
+      const correctsCurrentAssignment = Boolean(
+        incomingAssignmentMs < currentAssignmentMs
+        && (!communicationId || sameAssignmentCommunication || firstKnownAssignmentCommunication)
+      );
+      if (
+        Number.isFinite(incomingAssignmentMs)
+        && incomingAssignmentMs > 0
+        && (
+          !Number.isFinite(currentAssignmentMs)
+          || currentAssignmentMs <= 0
+          || firstKnownAssignmentCommunication
+          || newerAssignmentCommunication
+          || correctsCurrentAssignment
+        )
+      ) {
+        chat.genesysAssignedAt = atribuidoEm;
+        assignmentAccepted = true;
+      }
+      if (
+        communicationId
+        && (assignmentAccepted || communicationId === previousAssignmentCommunicationId)
+      ) {
+        chat.genesysAssignmentCommunicationId = communicationId;
+      }
+    } else if (!chat.genesysAssignedAt) {
+      chat.genesysAssignedAt = now;
+      if (communicationId) chat.genesysAssignmentCommunicationId = communicationId;
     }
 
     // Vars IXC / extras: merge (não apaga)

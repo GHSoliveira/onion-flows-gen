@@ -766,6 +766,7 @@ async function deliverReliableSnapshot(entry) {
               displayName: participantName
             },
             abertoEm: Number(entry.createdAt || Date.now()),
+            atribuidoEm: Number(entry.createdAt || Date.now()),
             source: "genesys-snapshot-recovery",
             environment: "dev"
           }).catch(() => false);
@@ -2376,6 +2377,7 @@ function normalizeNotificationSnapshot(raw, observedAt = Date.now()) {
       dnis: String(raw.call.dnis || "").replace(/\D/g, "").slice(0, 30)
     } : null,
     openedAt: raw?.openedAt || null,
+    assignedAt: raw?.assignedAt || null,
     inactivityTimeout: raw?.inactivityTimeout || null,
     agentCommunicationIds: (Array.isArray(raw?.agentCommunicationIds) ? raw.agentCommunicationIds : [])
       .map((id) => String(id || ""))
@@ -2701,6 +2703,7 @@ async function processPassiveCallStates(message = {}) {
           status: "open",
           cliente: primaryClient,
           abertoEm: Number(call?.conectadoEm || call?.desde || now),
+          atribuidoEm: Number(call?.conectadoEm || call?.desde || now),
           source: "genesys-passive-call",
           environment: "dev"
         }, "Ligação sem confirmação do Onion");
@@ -2782,6 +2785,7 @@ async function processPassiveConversationDiscovery(message = {}) {
           status: "open",
           cliente: primaryClient,
           abertoEm: Number(message.observedAt || Date.now()),
+          atribuidoEm: item?.assignedAt || Number(message.observedAt || Date.now()),
           source: "genesys-passive-network",
           environment: "dev"
         });
@@ -3075,6 +3079,24 @@ function activeAgentCommunicationId(detail) {
   }
   candidates.sort((left, right) => right.score - left.score || right.at - left.at);
   return candidates[0]?.id || "";
+}
+function activeAgentAssignedAt(detail) {
+  const participant = activeAgentParticipant(detail);
+  if (!participant || participant?.endTime) return null;
+  const communication = (Array.isArray(participant?.messages) ? participant.messages : [])
+    .filter((item) => (
+      !item?.disconnectedTime
+      && !["disconnected", "terminated"].includes(String(item?.state || "").toLowerCase())
+    ))
+    .sort((left, right) => (
+      new Date(right?.connectedTime || right?.startTime || 0).getTime()
+      - new Date(left?.connectedTime || left?.startTime || 0).getTime()
+    ))[0] || null;
+  return communication?.connectedTime
+    || communication?.startTime
+    || participant?.connectedTime
+    || participant?.startTime
+    || null;
 }
 function hasActiveAgentMessaging(detail) {
   return (detail?.participants || []).some((participant) => {
@@ -3934,6 +3956,7 @@ function conversationCustomerIdentity(detail) {
     pon,
     branch,
     communicationId: activeAgentCommunicationId(detail),
+    assignedAt: activeAgentAssignedAt(detail),
     openedAt: detail?.startTime || Date.now(),
     inactivityTimeout: detail?.inactivityTimeout || null
   };
@@ -4051,6 +4074,7 @@ async function syncConversationFromNotification(conversationId) {
         pon: notificationSnapshot.customerPon,
         branch: notificationSnapshot.customerBranch,
         communicationId: notificationSnapshot.agentCommunicationIds[0] || "",
+        assignedAt: notificationSnapshot.assignedAt || notificationSnapshot.observedAt || Date.now(),
         openedAt: notificationSnapshot.openedAt || notificationSnapshot.observedAt || Date.now(),
         inactivityTimeout: notificationSnapshot.inactivityTimeout || null
       };
@@ -4129,6 +4153,7 @@ async function syncConversationFromNotification(conversationId) {
         status: "open",
         cliente: primaryClient,
         abertoEm: identity.openedAt,
+        atribuidoEm: identity.assignedAt,
         inactivityTimeout: identity.inactivityTimeout,
         source: forceSnapshot
           ? "genesys-authoritative-repair"
@@ -4144,6 +4169,7 @@ async function syncConversationFromNotification(conversationId) {
         return;
       }
       upsertedNow = true;
+      state.assignmentSignature = `${identity.communicationId || ""}:${identity.assignedAt || ""}`;
       state.primaryClientSignature = primaryClientSignature;
       state.lifecycle = "ACTIVE";
       if (identity.communicationId) {
@@ -4168,6 +4194,29 @@ async function syncConversationFromNotification(conversationId) {
         identity.communicationId,
         "notification-sync"
       ).catch(() => {});
+    }
+
+    const assignmentSignature = `${identity.communicationId || ""}:${identity.assignedAt || ""}`;
+    if (
+      !upsertedNow
+      && identity.assignedAt
+      && state.assignmentSignature !== assignmentSignature
+    ) {
+      const assignmentUpdated = await deliverConversationUpsertToOnion({
+        convId: conversationId,
+        syncGeneration: state.syncGeneration,
+        ...(identity.communicationId ? { communicationId: identity.communicationId } : {}),
+        canal: "genesys",
+        genesysMediaType: "message",
+        conversationType: "message",
+        status: "open",
+        cliente: primaryClient,
+        abertoEm: identity.openedAt,
+        atribuidoEm: identity.assignedAt,
+        source: "genesys-assignment-refresh",
+        environment: "dev"
+      }, "Atribuicao Genesys sem confirmacao");
+      if (assignmentUpdated) state.assignmentSignature = assignmentSignature;
     }
 
     const documentChanged = identity.document && state.documentDigits !== identity.document.digits;
@@ -5348,6 +5397,7 @@ async function commitPendingFocus() {
     status: "open",
     cliente: focusedPrimaryClient,
     abertoEm: focusedIdentity.openedAt,
+    atribuidoEm: focusedIdentity.assignedAt,
     inactivityTimeout: focusedIdentity.inactivityTimeout,
     environment: "dev"
   }, "Conversa focada sem confirmação do Onion");

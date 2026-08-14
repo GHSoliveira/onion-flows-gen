@@ -200,6 +200,7 @@
            customerPon: "",
            customerBranch: "",
            openedAt: null,
+           assignedAt: null,
            inactivityTimeout: null,
            genesysMediaType: "",
            call: null,
@@ -228,6 +229,18 @@
           - new Date(left?.connectedTime || left?.startTime || 0).getTime()
         ))[0] || null;
       const currentAgentParticipantId = String(currentAgentParticipant?.id || "");
+      const currentAgentCommunication = [
+        ...(Array.isArray(currentAgentParticipant?.messages) ? currentAgentParticipant.messages : []),
+        ...(Array.isArray(currentAgentParticipant?.calls) ? currentAgentParticipant.calls : [])
+      ]
+        .filter((communication) => (
+          !communication?.disconnectedTime
+          && !["disconnected", "terminated"].includes(String(communication?.state || "").toLowerCase())
+        ))
+        .sort((left, right) => (
+          new Date(right?.connectedTime || right?.startTime || 0).getTime()
+          - new Date(left?.connectedTime || left?.startTime || 0).getTime()
+        ))[0] || null;
       let purposeByMessage = messagePurposeByConversation.get(entry.conversationId);
       if (!purposeByMessage) {
         purposeByMessage = new Map();
@@ -238,6 +251,11 @@
       }
       if (participants.length) {
         entry.openedAt = conversation.startTime || conversation.connectedTime || entry.openedAt;
+        entry.assignedAt = currentAgentCommunication?.connectedTime
+          || currentAgentCommunication?.startTime
+          || currentAgentParticipant?.connectedTime
+          || currentAgentParticipant?.startTime
+          || entry.assignedAt;
         entry.inactivityTimeout = conversation.inactivityTimeout || entry.inactivityTimeout;
         entry.active = participants.some((participant) => !participant?.endTime);
         const customer = participants.find(
@@ -489,6 +507,7 @@
         customerPon: entry.customerPon,
         customerBranch: entry.customerBranch,
         openedAt: entry.openedAt,
+        assignedAt: entry.assignedAt,
         inactivityTimeout: entry.inactivityTimeout,
         genesysMediaType: entry.genesysMediaType,
         call: entry.call,

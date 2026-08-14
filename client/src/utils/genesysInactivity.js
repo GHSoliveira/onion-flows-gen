@@ -3,11 +3,10 @@ const timestampOf = (value) => {
   return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : 0;
 };
 
-export const resolveGenesysConversationStartedAt = (chat) => {
+export const resolveGenesysConversationAssignedAt = (chat) => {
   const candidates = [
-    chat?.genesysStartedAt,
-    chat?.startTime,
-    chat?.startedAt,
+    chat?.genesysAssignedAt,
+    chat?.assignedAt,
     chat?.createdAt,
   ];
   for (const candidate of candidates) {

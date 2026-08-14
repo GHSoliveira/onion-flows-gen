@@ -23,7 +23,7 @@ import OnionAiIcon from '../components/OnionAiIcon';
 import toast from 'react-hot-toast';
 import { CenterSkeleton } from '../components/LoadingSkeleton';
 import { sortChatsForMode } from '../utils/chatSorting';
-import { resolveGenesysConversationStartedAt } from '../utils/genesysInactivity';
+import { resolveGenesysConversationAssignedAt } from '../utils/genesysInactivity';
 import { summarizeIxcOsAlerts } from '../utils/ixcOsAlerts';
 import { findIxcSectorSuggestion, IXC_SECTOR_OPTIONS } from '../utils/ixcSectorCatalog';
 import { bindRingerUnlock, startRinging, stopRinging, subscribeRinger } from '../utils/callRinger';
@@ -352,12 +352,12 @@ const formatConversationElapsed = (elapsedMs) => {
 const HEADER_ICON_BUTTON_CLASS = 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-transparent transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent dark:hover:bg-slate-800';
 const COMPACT_HEADER_ICON_BUTTON_CLASS = 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-transparent transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent dark:hover:bg-slate-800';
 
-const GenesysConversationAgeLiquid = ({ chat, appearance }) => {
+const GenesysAssignmentAgeLiquid = ({ chat, appearance }) => {
   const enabled = appearance?.inactivityBarEnabled !== false;
-  const conversationStartedAt = resolveGenesysConversationStartedAt(chat);
-  const now = useSharedClock(enabled && Boolean(conversationStartedAt));
+  const conversationAssignedAt = resolveGenesysConversationAssignedAt(chat);
+  const now = useSharedClock(enabled && Boolean(conversationAssignedAt));
 
-  if (!enabled || !conversationStartedAt) return null;
+  if (!enabled || !conversationAssignedAt) return null;
   const limitMinutes = normalizeAppearanceRange(
     appearance?.inactivityLimitMinutes,
     DEFAULT_CHAT_APPEARANCE.inactivityLimitMinutes,
@@ -373,15 +373,15 @@ const GenesysConversationAgeLiquid = ({ chat, appearance }) => {
     appearance?.inactivityGradientEndColor,
     DEFAULT_CHAT_APPEARANCE.inactivityGradientEndColor
   );
-  const elapsedMs = Math.max(0, now - conversationStartedAt);
+  const elapsedMs = Math.max(0, now - conversationAssignedAt);
   const progress = Math.min(1, elapsedMs / limitMs);
   const critical = progress >= 0.8;
   const expired = progress >= 1;
   const label = formatConversationElapsed(elapsedMs);
   const limitLabel = Number.isInteger(limitMinutes) ? String(limitMinutes) : String(limitMinutes).replace('.', ',');
   const title = expired
-    ? `Conversa em andamento há ${label} · referência visual de ${limitLabel} minuto(s) atingida`
-    : `Conversa em andamento há ${label} · referência visual de ${limitLabel} minuto(s)`;
+    ? `Atendimento com o agente há ${label} · referência visual de ${limitLabel} minuto(s) atingida`
+    : `Atendimento com o agente há ${label} · referência visual de ${limitLabel} minuto(s)`;
 
   return (
     <>
@@ -1787,6 +1787,7 @@ const AgentWorkspace = () => {
             const variablesChanged = JSON.stringify(updated?.variables || {}) !== JSON.stringify(current.variables || {});
             const metaChanged = (
               updated.customerName !== current.customerName
+              || updated.genesysAssignedAt !== current.genesysAssignedAt
               || updated.genesysStartedAt !== current.genesysStartedAt
               || updated.lastMessageAt !== current.lastMessageAt
               || updated.messageCount !== current.messageCount
@@ -2018,6 +2019,7 @@ const AgentWorkspace = () => {
             id: c.id,
             genesysConvId: c.genesysConvId || chat.genesysConvId,
             externalConvId: c.externalConvId || chat.externalConvId,
+            genesysAssignedAt: chat.genesysAssignedAt || c.genesysAssignedAt,
             genesysStartedAt: chat.genesysStartedAt || c.genesysStartedAt,
             historySeeded: chat.historySeeded ?? c.historySeeded,
             messageCount: chat.messageCount ?? c.messageCount,
@@ -3504,7 +3506,7 @@ const AgentWorkspace = () => {
     const unreadCount = Number(unreadByChatId[chat.id] || 0);
     const showGenesysConversationAge = chatAppearance.inactivityBarEnabled !== false
       && isGenesysChatClient(chat)
-      && Boolean(resolveGenesysConversationStartedAt(chat));
+      && Boolean(resolveGenesysConversationAssignedAt(chat));
     // Borda de selecao fica no shell INTERNO (fora do transform residual do motion)
     const shellClass = waitingTone
       ? (selected
@@ -3543,7 +3545,7 @@ const AgentWorkspace = () => {
           data-selected={selected ? 'true' : 'false'}
           data-chat-id={chatId}
         >
-          {showGenesysConversationAge ? <GenesysConversationAgeLiquid chat={chat} appearance={chatAppearance} /> : null}
+          {showGenesysConversationAge ? <GenesysAssignmentAgeLiquid chat={chat} appearance={chatAppearance} /> : null}
           <button
             type="button"
             onClick={() => handleChatCardClick(chat)}
@@ -5865,12 +5867,12 @@ const AgentWorkspace = () => {
                     </div>
 
                     <div>
-                      <div className="mb-2 text-[10px] font-bold uppercase tracking-wide text-slate-500">Indicador de inatividade</div>
+                      <div className="mb-2 text-[10px] font-bold uppercase tracking-wide text-slate-500">Tempo no atendimento</div>
                       <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
                         <label className="flex items-center justify-between gap-3">
                           <span>
                             <span className="block text-[10px] font-bold text-slate-700 dark:text-slate-200">Mostrar barra colorida nos cards</span>
-                            <span className="text-[9px] text-slate-400">Tempo total desde o início da conversa</span>
+                            <span className="text-[9px] text-slate-400">Conta desde que o card chegou ao agente</span>
                           </span>
                           <input
                             type="checkbox"
@@ -5931,7 +5933,7 @@ const AgentWorkspace = () => {
                             <div className="h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800" title="Prévia da progressão de cores">
                               <div className="h-full w-full rounded-full" style={{ background: `linear-gradient(90deg, ${appearanceDraft.inactivityGradientStartColor}, ${appearanceDraft.inactivityGradientEndColor})` }} />
                             </div>
-                            <p className="text-[9px] leading-4 text-slate-400">Esta preferência muda somente o indicador visual. O tempo real de encerramento continua sendo controlado pelo Genesys.</p>
+                            <p className="text-[9px] leading-4 text-slate-400">Esta preferência altera somente a referência visual e não interfere no Genesys.</p>
                           </div>
                         ) : null}
                       </div>
