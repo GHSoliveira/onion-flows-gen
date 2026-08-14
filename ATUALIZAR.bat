@@ -82,8 +82,7 @@ if errorlevel 1 (
 for /f "delims=" %%H in ('git rev-parse HEAD 2^>nul') do set "HEAD_NOVO=%%H"
 if /I "%HEAD_ANTIGO%"=="%HEAD_NOVO%" (
   echo.
-  echo [OK] O OnionFlows ja esta atualizado.
-  goto :sucesso
+  echo [OK] O codigo ja esta atualizado. Verificando e reparando o ambiente...
 )
 
 set "ATUALIZAR_BACKEND="
@@ -95,10 +94,24 @@ for /f "delims=" %%F in ('git diff --name-only "%HEAD_ANTIGO%" "%HEAD_NOVO%"') d
   if /I "%%F"=="client/package-lock.json" set "ATUALIZAR_FRONTEND=1"
 )
 
+if not exist "node_modules\" set "ATUALIZAR_BACKEND=1"
+if not defined ATUALIZAR_BACKEND (
+  call npm ls --depth=0 >nul 2>&1
+  if errorlevel 1 set "ATUALIZAR_BACKEND=1"
+)
+
+if not exist "client\node_modules\" set "ATUALIZAR_FRONTEND=1"
+if not defined ATUALIZAR_FRONTEND (
+  pushd client
+  call npm ls --depth=0 >nul 2>&1
+  if errorlevel 1 set "ATUALIZAR_FRONTEND=1"
+  popd
+)
+
 if defined ATUALIZAR_BACKEND (
   echo.
   echo Atualizando dependencias do servidor...
-  call npm install
+  call npm install --no-audit --no-fund
   if errorlevel 1 (
     echo [ERRO] Nao foi possivel atualizar as dependencias do servidor.
     goto :falha_pos_merge
@@ -109,7 +122,7 @@ if defined ATUALIZAR_FRONTEND (
   echo.
   echo Atualizando dependencias da interface...
   pushd client
-  call npm install
+  call npm install --no-audit --no-fund
   set "NPM_FRONTEND_ERRO=!errorlevel!"
   popd
   if not "!NPM_FRONTEND_ERRO!"=="0" (
@@ -119,8 +132,7 @@ if defined ATUALIZAR_FRONTEND (
 )
 
 echo.
-echo Reiniciando o OnionFlows com a nova versao...
-call "%~dp0STOP.bat" <nul
+echo Reconstruindo e reiniciando o OnionFlows...
 call "%~dp0START.bat" <nul
 if errorlevel 1 (
   echo.
@@ -139,6 +151,8 @@ echo.
 if defined AUTO_MODE (
   >"%UPDATE_STATUS%" echo success^|%UPDATE_REQUEST_ID%^|!HEAD_ANTIGO!^|!HEAD_NOVO!
 ) else (
+  echo Abrindo o Onion local...
+  start "" "http://127.0.0.1:3101"
   pause
 )
 exit /b 0

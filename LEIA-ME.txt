@@ -1,6 +1,6 @@
 # Onion Flows — pacote local companion
 
-Versão publicada: 5.3.34
+Versão publicada: 5.3.35
 
 ## Requisitos
 
@@ -75,9 +75,14 @@ Execute `STOP.bat`.
 
 ## Atualizar pelo GitHub
 
-Execute `ATUALIZAR.bat`. O atualizador:
+Para uso comum, abra o popup da extensão e clique em **Sincronizar e reparar**.
+Se o popup não abrir, execute `SINCRONIZAR-ONION.bat` na pasta já baixada.
+
+O sincronizador:
 
 - bloqueia a operação se houver alterações locais;
 - aceita somente atualização linear por fast-forward;
-- atualiza dependências apenas quando os manifests mudarem;
-- reinicia o Onion depois de instalar uma versão nova com sucesso.
+- repara dependências ausentes ou inconsistentes;
+- compila a interface antes de derrubar o servidor atual;
+- reconstrói e reinicia mesmo quando o código já está atualizado;
+- valida `/health`, abre o Onion e recarrega extensão, Onion e Genesys.

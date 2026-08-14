@@ -116,16 +116,16 @@ $("update-all").addEventListener("click", async () => {
   button.disabled = true;
   updateTools.classList.add("is-running");
   button.textContent = "Aguarde";
-  status.textContent = "Atualizando pelo GitHub…";
+  status.textContent = "Sincronizando todo o ambiente…";
   try {
     const result = await send({ type: "DEV_LOCAL_UPDATE", baseUrl: baseUrl.value });
     if (!result?.ok) throw new Error(result?.error || "Falha ao atualizar");
     status.textContent = result.changed === false
-      ? "Tudo atualizado · recarregando páginas"
-      : "Atualização concluída · recarregando páginas";
+      ? "Ambiente reparado · recarregando tudo"
+      : "Nova versão instalada · recarregando tudo";
     button.textContent = "Pronto";
   } catch (error) {
-    status.textContent = error?.message || "Falha ao atualizar ambiente";
+    status.textContent = error?.message || "Falha ao sincronizar ambiente";
     button.textContent = "Tentar novamente";
     button.disabled = false;
     updateTools.classList.remove("is-running");

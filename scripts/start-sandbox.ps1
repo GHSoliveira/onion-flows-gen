@@ -50,15 +50,14 @@ function Wait-SandboxEndpoint {
 New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $SandboxDir 'data') | Out-Null
 
-& (Join-Path $PSScriptRoot 'stop-sandbox.ps1') -Quiet
-
-foreach ($logPath in @($BackendOut, $BackendErr, $FrontendOut, $FrontendErr)) {
+foreach ($logPath in @($FrontendOut, $FrontendErr)) {
   Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
 }
 
 $backendScript = Join-Path $PSScriptRoot 'run-backend-sandbox.ps1'
 $frontendScript = Join-Path $PSScriptRoot 'run-frontend-sandbox.ps1'
 $backend = $null
+$runtimeReplacementStarted = $false
 
 try {
   Write-Host '[SANDBOX] Compilando frontend local...'
@@ -72,6 +71,15 @@ try {
     -RedirectStandardError $FrontendErr
   if ($frontendBuild.ExitCode -ne 0) {
     throw "Build do frontend falhou (codigo $($frontendBuild.ExitCode))."
+  }
+
+  # Só derruba a versão atual depois que a interface nova compilou. Assim uma
+  # falha de dependência/build não deixa o usuário sem Onion funcionando.
+  Write-Host '[SANDBOX] Build confirmado. Substituindo o runtime atual...'
+  & (Join-Path $PSScriptRoot 'stop-sandbox.ps1') -Quiet
+  $runtimeReplacementStarted = $true
+  foreach ($logPath in @($BackendOut, $BackendErr)) {
+    Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
   }
 
   Write-Host '[SANDBOX] Iniciando backend...'
@@ -110,6 +118,8 @@ try {
   Show-LogTail -Label 'backend.out.log' -Path $BackendOut
   Show-LogTail -Label 'frontend.err.log' -Path $FrontendErr
   Show-LogTail -Label 'frontend.out.log' -Path $FrontendOut
-  & (Join-Path $PSScriptRoot 'stop-sandbox.ps1') -Quiet
+  if ($runtimeReplacementStarted) {
+    & (Join-Path $PSScriptRoot 'stop-sandbox.ps1') -Quiet
+  }
   exit 1
 }
