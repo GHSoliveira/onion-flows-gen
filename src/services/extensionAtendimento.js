@@ -468,6 +468,7 @@ const handleExtUpsertUnlocked = async (socket, payload = {}) => {
       channelChatId: channelUserId,
       currentNodeId: null,
       processedMessageIds: [],
+      genesysStartedAt: abertoEm || now,
       createdAt: abertoEm || now,
       updatedAt: now,
       secureVars: {},
@@ -500,6 +501,19 @@ const handleExtUpsertUnlocked = async (socket, payload = {}) => {
       chat.conversationType = genesysMediaType;
     }
     chat.updatedAt = now;
+    if (abertoEm) {
+      const incomingStartMs = new Date(abertoEm).getTime();
+      const currentStartMs = new Date(chat.genesysStartedAt || chat.createdAt || 0).getTime();
+      if (
+        Number.isFinite(incomingStartMs)
+        && incomingStartMs > 0
+        && (!Number.isFinite(currentStartMs) || currentStartMs <= 0 || incomingStartMs < currentStartMs)
+      ) {
+        chat.genesysStartedAt = abertoEm;
+      } else if (!chat.genesysStartedAt && Number.isFinite(currentStartMs) && currentStartMs > 0) {
+        chat.genesysStartedAt = new Date(currentStartMs).toISOString();
+      }
+    }
 
     // Vars IXC / extras: merge (não apaga)
     if (Object.keys(clienteVars).length) {

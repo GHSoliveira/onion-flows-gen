@@ -23,7 +23,7 @@ import OnionAiIcon from '../components/OnionAiIcon';
 import toast from 'react-hot-toast';
 import { CenterSkeleton } from '../components/LoadingSkeleton';
 import { sortChatsForMode } from '../utils/chatSorting';
-import { resolveGenesysLastActivityAt } from '../utils/genesysInactivity';
+import { resolveGenesysConversationStartedAt } from '../utils/genesysInactivity';
 import { summarizeIxcOsAlerts } from '../utils/ixcOsAlerts';
 import { findIxcSectorSuggestion, IXC_SECTOR_OPTIONS } from '../utils/ixcSectorCatalog';
 import { bindRingerUnlock, startRinging, stopRinging, subscribeRinger } from '../utils/callRinger';
@@ -338,20 +338,26 @@ const IxcCatalogSearch = ({ label, placeholder, options, query, selectedCode, on
   );
 };
 
-const formatInactivityRemaining = (remainingMs) => {
-  const seconds = Math.max(0, Math.ceil(remainingMs / 1000));
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+const formatConversationElapsed = (elapsedMs) => {
+  const seconds = Math.max(0, Math.floor(elapsedMs / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainingSeconds = seconds % 60;
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}`;
+  }
+  return `${minutes}:${String(remainingSeconds).padStart(2, '0')}`;
 };
 
 const HEADER_ICON_BUTTON_CLASS = 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-transparent transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent dark:hover:bg-slate-800';
 const COMPACT_HEADER_ICON_BUTTON_CLASS = 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-transparent transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent dark:hover:bg-slate-800';
 
-const GenesysInactivityLiquid = ({ chat, appearance }) => {
+const GenesysConversationAgeLiquid = ({ chat, appearance }) => {
   const enabled = appearance?.inactivityBarEnabled !== false;
-  const lastActivityAt = resolveGenesysLastActivityAt(chat);
-  const now = useSharedClock(enabled && Boolean(lastActivityAt));
+  const conversationStartedAt = resolveGenesysConversationStartedAt(chat);
+  const now = useSharedClock(enabled && Boolean(conversationStartedAt));
 
-  if (!enabled || !lastActivityAt) return null;
+  if (!enabled || !conversationStartedAt) return null;
   const limitMinutes = normalizeAppearanceRange(
     appearance?.inactivityLimitMinutes,
     DEFAULT_CHAT_APPEARANCE.inactivityLimitMinutes,
@@ -367,16 +373,15 @@ const GenesysInactivityLiquid = ({ chat, appearance }) => {
     appearance?.inactivityGradientEndColor,
     DEFAULT_CHAT_APPEARANCE.inactivityGradientEndColor
   );
-  const elapsedMs = Math.max(0, now - lastActivityAt);
+  const elapsedMs = Math.max(0, now - conversationStartedAt);
   const progress = Math.min(1, elapsedMs / limitMs);
-  const remainingMs = Math.max(0, limitMs - elapsedMs);
   const critical = progress >= 0.8;
   const expired = progress >= 1;
-  const label = expired ? '0:00' : formatInactivityRemaining(remainingMs);
+  const label = formatConversationElapsed(elapsedMs);
   const limitLabel = Number.isInteger(limitMinutes) ? String(limitMinutes) : String(limitMinutes).replace('.', ',');
   const title = expired
-    ? `Limite visual de ${limitLabel} minuto(s) atingido`
-    : `Indicador visual chega ao fim em ${label}`;
+    ? `Conversa em andamento há ${label} · referência visual de ${limitLabel} minuto(s) atingida`
+    : `Conversa em andamento há ${label} · referência visual de ${limitLabel} minuto(s)`;
 
   return (
     <>
@@ -1782,6 +1787,7 @@ const AgentWorkspace = () => {
             const variablesChanged = JSON.stringify(updated?.variables || {}) !== JSON.stringify(current.variables || {});
             const metaChanged = (
               updated.customerName !== current.customerName
+              || updated.genesysStartedAt !== current.genesysStartedAt
               || updated.lastMessageAt !== current.lastMessageAt
               || updated.messageCount !== current.messageCount
               || updated.historySeeded !== current.historySeeded
@@ -2012,6 +2018,7 @@ const AgentWorkspace = () => {
             id: c.id,
             genesysConvId: c.genesysConvId || chat.genesysConvId,
             externalConvId: c.externalConvId || chat.externalConvId,
+            genesysStartedAt: chat.genesysStartedAt || c.genesysStartedAt,
             historySeeded: chat.historySeeded ?? c.historySeeded,
             messageCount: chat.messageCount ?? c.messageCount,
             lastMessage: chat.lastMessage || c.lastMessage,
@@ -3495,9 +3502,9 @@ const AgentWorkspace = () => {
     const preview = getLastMessagePreview(chat);
     const lastMessage = Array.isArray(chat?.messages) ? chat.messages[chat.messages.length - 1] : null;
     const unreadCount = Number(unreadByChatId[chat.id] || 0);
-    const showGenesysInactivity = chatAppearance.inactivityBarEnabled !== false
+    const showGenesysConversationAge = chatAppearance.inactivityBarEnabled !== false
       && isGenesysChatClient(chat)
-      && Boolean(resolveGenesysLastActivityAt(chat));
+      && Boolean(resolveGenesysConversationStartedAt(chat));
     // Borda de selecao fica no shell INTERNO (fora do transform residual do motion)
     const shellClass = waitingTone
       ? (selected
@@ -3536,7 +3543,7 @@ const AgentWorkspace = () => {
           data-selected={selected ? 'true' : 'false'}
           data-chat-id={chatId}
         >
-          {showGenesysInactivity ? <GenesysInactivityLiquid chat={chat} appearance={chatAppearance} /> : null}
+          {showGenesysConversationAge ? <GenesysConversationAgeLiquid chat={chat} appearance={chatAppearance} /> : null}
           <button
             type="button"
             onClick={() => handleChatCardClick(chat)}
@@ -3563,7 +3570,7 @@ const AgentWorkspace = () => {
                   </span>
                 </div>
               </div>
-              <div className={`mt-px truncate text-[10px] leading-tight text-slate-500 dark:text-slate-400 ${showGenesysInactivity ? 'pr-10' : ''}`}>{preview}</div>
+              <div className={`mt-px truncate text-[10px] leading-tight text-slate-500 dark:text-slate-400 ${showGenesysConversationAge ? 'pr-10' : ''}`}>{preview}</div>
               {waitingTone ? (
                 <div className="text-[9px] font-semibold text-orange-600 dark:text-orange-300">
                   Esperando ha <WaitingElapsed since={chat.waitingSince || chat.transferredAt || chat.createdAt} />
@@ -5872,7 +5879,7 @@ const AgentWorkspace = () => {
                         <label className="flex items-center justify-between gap-3">
                           <span>
                             <span className="block text-[10px] font-bold text-slate-700 dark:text-slate-200">Mostrar barra colorida nos cards</span>
-                            <span className="text-[9px] text-slate-400">Progresso desde a última mensagem</span>
+                            <span className="text-[9px] text-slate-400">Tempo total desde o início da conversa</span>
                           </span>
                           <input
                             type="checkbox"
@@ -5886,7 +5893,7 @@ const AgentWorkspace = () => {
                           <div className="mt-3 space-y-3 border-t border-slate-100 pt-3 dark:border-slate-800">
                             <label className="block">
                               <span className="mb-1.5 flex items-center justify-between gap-3">
-                                <span className="text-[10px] font-bold text-slate-700 dark:text-slate-200">Tempo para completar</span>
+                                <span className="text-[10px] font-bold text-slate-700 dark:text-slate-200">Referência visual para completar</span>
                                 <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-slate-500">
                                   <input
                                     type="number"
