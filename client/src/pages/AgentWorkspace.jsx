@@ -23,6 +23,7 @@ import OnionAiIcon from '../components/OnionAiIcon';
 import toast from 'react-hot-toast';
 import { CenterSkeleton } from '../components/LoadingSkeleton';
 import { sortChatsForMode } from '../utils/chatSorting';
+import { resolveGenesysLastActivityAt } from '../utils/genesysInactivity';
 import { summarizeIxcOsAlerts } from '../utils/ixcOsAlerts';
 import { findIxcSectorSuggestion, IXC_SECTOR_OPTIONS } from '../utils/ixcSectorCatalog';
 import { bindRingerUnlock, startRinging, stopRinging, subscribeRinger } from '../utils/callRinger';
@@ -335,19 +336,6 @@ const IxcCatalogSearch = ({ label, placeholder, options, query, selectedCode, on
       ) : null}
     </label>
   );
-};
-
-const resolveGenesysLastActivityAt = (chat) => {
-  const summarized = parseMessageTimeLoose(chat?.lastMessageAt);
-  if (summarized) return summarized;
-  const messages = Array.isArray(chat?.messages) ? chat.messages : [];
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (!['user', 'agent'].includes(String(message?.sender || '').toLowerCase())) continue;
-    const timestamp = parseMessageTimeLoose(message?.timestamp || message?.createdAt);
-    if (timestamp) return timestamp;
-  }
-  return 0;
 };
 
 const formatInactivityRemaining = (remainingMs) => {
@@ -1633,7 +1621,12 @@ const AgentWorkspace = () => {
       const preferences = data?.preferences || {};
       if (preferences.name && updateUser) updateUser({ name: preferences.name });
       if (preferences.appearance) {
-        const normalized = normalizeChatAppearance(preferences.appearance);
+        // Servidores de uma versão anterior não conhecem os campos novos.
+        // O retorno parcial nunca deve apagar uma preferência local já escolhida.
+        const normalized = normalizeChatAppearance({
+          ...savedAppearance,
+          ...preferences.appearance,
+        });
         localStorage.setItem(chatAppearanceStorageKey(user.id), JSON.stringify(normalized));
         setChatAppearance(normalized);
         setAppearanceDraft(normalized);
@@ -1868,11 +1861,15 @@ const AgentWorkspace = () => {
       const wasKnown = knownChatIdsRef.current.has(String(chatId));
 
       const messageAt = parseMessageTime(message.timestamp);
+      const messageSender = String(message?.sender || '').trim().toLowerCase();
+      const activityTimestamp = message.timestamp || new Date().toISOString();
       const applyMessageToChat = (chat) => ({
         ...chat,
         messages: appendRealtimeMessage(chat?.messages, message),
         lastMessage: message,
         lastMessageAt: message.timestamp || chat?.lastMessageAt,
+        lastCustomerMessageAt: messageSender === 'user' ? activityTimestamp : chat?.lastCustomerMessageAt,
+        lastAgentMessageAt: messageSender === 'agent' ? activityTimestamp : chat?.lastAgentMessageAt,
         messageCount: Math.max(
           Number(chat?.messageCount || 0),
           (Array.isArray(chat?.messages) ? chat.messages.length : 0) + 1,
@@ -1897,6 +1894,8 @@ const AgentWorkspace = () => {
           ...chat,
           lastMessage: message,
           lastMessageAt: message.timestamp || chat.lastMessageAt,
+          lastCustomerMessageAt: messageSender === 'user' ? activityTimestamp : chat.lastCustomerMessageAt,
+          lastAgentMessageAt: messageSender === 'agent' ? activityTimestamp : chat.lastAgentMessageAt,
           messageCount: Math.max(Number(chat.messageCount || 0) + 1, 1),
           updatedAt: message.timestamp || new Date().toISOString()
         };
