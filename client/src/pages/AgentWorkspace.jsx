@@ -5059,17 +5059,8 @@ const AgentWorkspace = () => {
             <div className="flex shrink-0 items-center gap-1">
               <button
                 type="button"
-                title="Limpar clientes Genesys somente do Onion"
-                aria-label="Limpar clientes Genesys do Onion"
-                onClick={handleFlushGenesysLocal}
-                disabled={genesysFlushLoading || ![...myChats, ...waitingChats].some(isGenesysChatClient)}
-                className={`${COMPACT_HEADER_ICON_BUTTON_CLASS} text-red-500 hover:text-red-700 dark:text-red-300`}
-              >
-                {genesysFlushLoading ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
-              </button>
-              <button
-                type="button"
-                title="Nome e aparência"
+                title="Configurações do Onion"
+                aria-label="Abrir configurações do Onion"
                 onClick={openAppearanceSettings}
                 className={`${COMPACT_HEADER_ICON_BUTTON_CLASS} text-slate-500 hover:text-slate-800 dark:text-slate-300 dark:hover:text-white`}
               >
@@ -5742,8 +5733,8 @@ const AgentWorkspace = () => {
             <div className="ui-modal-surface max-h-[92vh] w-full max-w-2xl overflow-hidden rounded-3xl bg-white shadow-2xl dark:bg-slate-900" onClick={(e) => e.stopPropagation()}>
               <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-800">
                 <div>
-                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">Seu espaço no Onion</h3>
-                  <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">Nome e aparência ficam salvos neste computador, mesmo após reiniciar o Onion.</p>
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">Configurações do Onion</h3>
+                  <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">Preferências visuais e manutenção local do seu ambiente.</p>
                 </div>
                 <button type="button" disabled={nameEditor.saving} onClick={() => setNameEditor({ open: false, value: '', saving: false })} className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100 text-slate-500 hover:bg-slate-200 disabled:opacity-50 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"><XIcon size={16} /></button>
               </div>
@@ -5975,6 +5966,29 @@ const AgentWorkspace = () => {
                         ) : null}
                       </div>
                     </div>
+
+                    <section className="rounded-2xl border border-red-200 bg-red-50/60 p-3 dark:border-red-900/50 dark:bg-red-950/20">
+                      <div className="flex items-start gap-2.5">
+                        <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white text-red-500 shadow-sm ring-1 ring-red-100 dark:bg-slate-900 dark:text-red-300 dark:ring-red-900/50">
+                          <Trash2 size={14} />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[10px] font-bold uppercase tracking-wide text-red-700 dark:text-red-300">Manutenção local</div>
+                          <p className="mt-1 text-[9px] leading-4 text-red-600/80 dark:text-red-300/70">Remove todos os cards Genesys somente do Onion. Nenhuma conversa é encerrada no Genesys.</p>
+                          <button
+                            type="button"
+                            title="Limpar clientes Genesys somente do Onion"
+                            aria-label="Limpar clientes Genesys do Onion"
+                            onClick={handleFlushGenesysLocal}
+                            disabled={genesysFlushLoading || ![...myChats, ...waitingChats].some(isGenesysChatClient)}
+                            className="mt-2 inline-flex min-h-8 w-full items-center justify-center gap-2 rounded-xl border border-red-200 bg-white px-3 py-2 text-[10px] font-bold text-red-600 transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-45 dark:border-red-900/60 dark:bg-slate-900 dark:text-red-300 dark:hover:bg-red-950/40"
+                          >
+                            {genesysFlushLoading ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                            {genesysFlushLoading ? 'Limpando cards...' : `Apagar ${[...myChats, ...waitingChats].filter(isGenesysChatClient).length} card(s) Genesys`}
+                          </button>
+                        </div>
+                      </div>
+                    </section>
                   </div>
 
                   <div>

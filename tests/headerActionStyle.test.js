@@ -19,3 +19,14 @@ test('acoes do header usam icones transparentes e circulo suave apenas no hover'
   assert.match(workspace, /<ClipboardList size=\{15\} \/>/);
   assert.doesNotMatch(workspace, /<span className="hidden sm:inline">Finalizar OS<\/span>/);
 });
+
+test('limpeza de cards Genesys fica somente no final das configurações', async () => {
+  const workspace = await loadWorkspace();
+  const settingsStart = workspace.indexOf('{nameEditor.open ? (');
+  const flushButton = workspace.indexOf('title="Limpar clientes Genesys somente do Onion"');
+  assert.ok(settingsStart > 0);
+  assert.ok(flushButton > settingsStart);
+  assert.equal((workspace.match(/title="Limpar clientes Genesys somente do Onion"/g) || []).length, 1);
+  assert.match(workspace, />Manutenção local</);
+  assert.match(workspace, /Nenhuma conversa é encerrada no Genesys/);
+});
