@@ -1286,6 +1286,11 @@ const handleExtLigacaoUnlocked = async (socket, payload = {}) => {
       ani: ani || previous?.ani || null,
       dnis: dnis || previous?.dnis || null,
       wrapupPendente: payload.wrapupPendente === true,
+      // Depois que a perna do agente conectou, silêncio no WebSocket é normal:
+      // a captura real mostrou 114 s sem eventos durante uma chamada saudável.
+      // Esse marcador impede o watcher de confundir ausência de heartbeat com fim.
+      confirmedConnected: ['connected', 'held'].includes(estado)
+        || previous?.confirmedConnected === true,
       // Âncora vinda da observação da extensão, não do connectedTime do
       // Genesys: o cronômetro pode começar alguns segundos atrasado.
       ancoraAproximada: ancoraAproximada || previous?.ancoraAproximada === true,

@@ -407,6 +407,45 @@ const handleGenesysCallExpiry = async (chat) => {
   // Call shell sem estado é card anterior ao contrato: sem TTL, nada a decidir.
   if (!call || call.estado === 'disconnected') return;
 
+  // O stream do Genesys é orientado a mudança, não a heartbeat. Na captura real,
+  // uma chamada conectada ficou 114 s sem publicar nada e encerrou normalmente.
+  // Logo, TTL curto só é válido enquanto ainda está `alerting`. Depois de conectar,
+  // apenas evento terminal (com DOM/roster como fallback) pode encerrar o card.
+  const connectedStateIsAuthoritative = call.confirmedConnected === true
+    || ['connected', 'held'].includes(call.estado);
+  if (connectedStateIsAuthoritative) {
+    if (call.stale !== true) return;
+    let recovered = null;
+    await withChatLock(chat.id, async () => {
+      const live = await adapter.getDocument('activeChats', { id: chat.id });
+      if (!live || live.status !== 'open') return;
+      const liveCall = live.genesysCall && typeof live.genesysCall === 'object' ? live.genesysCall : null;
+      if (!liveCall || liveCall.estado === 'disconnected') return;
+      const liveConnected = liveCall.confirmedConnected === true
+        || ['connected', 'held'].includes(liveCall.estado);
+      if (!liveConnected || liveCall.stale !== true) return;
+      live.genesysCall = {
+        ...liveCall,
+        confirmedConnected: true,
+        stale: false,
+        staleAt: null
+      };
+      live.updatedAt = new Date().toISOString();
+      await adapter.saveDocument('activeChats', live);
+      recovered = live;
+    });
+    if (!recovered) return;
+    const io = getIo();
+    if (io && recovered.tenantId) {
+      io.to(`tenant:${recovered.tenantId}`).emit('genesys_call_state', {
+        chatId: recovered.id,
+        convId: recovered.genesysConvId || recovered.externalConvId || null,
+        call: recovered.genesysCall
+      });
+    }
+    return;
+  }
+
   const now = Date.now();
   const expiresAt = Number(call.expiraEm)
     || (Number(call.atualizadoEm || 0) + GENESYS_CALL_DEFAULT_TTL_MS);
@@ -414,12 +453,9 @@ const handleGenesysCallExpiry = async (chat) => {
 
   const alreadyStale = call.stale === true;
   const staleSince = Number(call.staleAt || 0);
-  // Ligação que chegou a conectar nunca fecha sozinha: se a extensão morreu no
-  // meio da conversa, o agente ainda está falando. Card congelado é
-  // recuperável, card fechado é perda. Só some o que travou em `alerting`.
-  const everConnected = Number(call.conectadoEm || 0) > 0;
+  // Só `alerting` chega aqui. Primeiro acusa falta de sinal; depois remove o
+  // convite zumbi se nunca houve conexão nem evento terminal.
   const shouldClose = alreadyStale
-    && !everConnected
     && staleSince > 0
     && (now - staleSince) >= GENESYS_CALL_ZOMBIE_MS;
   if (alreadyStale && !shouldClose) return;

@@ -228,9 +228,12 @@ test('estado de ligação descarta geração antiga e retry fora de ordem', asyn
   assert.match(ligacao, /reason: 'stale_sync_generation'/);
   // Fechamento não pode ressuscitar card inexistente.
   assert.match(ligacao, /!chat && estado === 'disconnected'/);
+  // Silêncio após conectar não é perda de sinal: o Genesys não envia heartbeat.
+  assert.match(ligacao, /confirmedConnected: \['connected', 'held'\]\.includes\(estado\)/);
+  assert.match(ligacao, /previous\?\.confirmedConnected === true/);
 });
 
-test('watcher expira ligação zumbi em dois estágios sem matar keepalive atrasado', async () => {
+test('watcher preserva ligação conectada e expira somente alerting zumbi', async () => {
   const watcher = await readFile(
     new URL('../src/services/chatRuntimeWatcher.js', import.meta.url),
     'utf8'
@@ -239,10 +242,16 @@ test('watcher expira ligação zumbi em dois estágios sem matar keepalive atras
   assert.match(watcher, /isGenesysCallShell\(chat\) \|\| chat\.status !== 'open'/);
   // Card anterior ao contrato não tem TTL: não pode ser fechado por engano.
   assert.match(watcher, /if \(!call \|\| call\.estado === 'disconnected'\) return/);
-  // Estágio 1 congela, estágio 2 fecha — nunca fecha direto.
+  // Connected/held não dependem de heartbeat e um card stale antigo é reparado.
+  assert.match(watcher, /const connectedStateIsAuthoritative/);
+  assert.match(watcher, /call\.confirmedConnected === true/);
+  assert.match(watcher, /\['connected', 'held'\]\.includes\(call\.estado\)/);
+  assert.match(watcher, /confirmedConnected: true,[\s\S]*?stale: false,[\s\S]*?staleAt: null/);
+  // Para alerting, estágio 1 acusa e estágio 2 fecha — nunca fecha direto.
   assert.match(watcher, /const shouldClose = alreadyStale/);
   assert.match(watcher, /stale: true, staleAt: Date\.now\(\)/);
   assert.match(watcher, /closeReason = 'genesys_ligacao_sem_sinal'/);
+  assert.doesNotMatch(watcher, /const everConnected =/);
   // Revalida o TTL sob lock: evento fresco no meio do caminho cancela a expiração.
   assert.match(watcher, /if \(Number\.isFinite\(liveExpiresAt\) && Date\.now\(\) <= liveExpiresAt\) return/);
   assert.match(watcher, /await handleGenesysCallExpiry\(afterInactivityChat\)/);
