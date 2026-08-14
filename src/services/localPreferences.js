@@ -8,7 +8,9 @@ const APPEARANCE_FIELDS = new Set([
   'backgroundMode', 'backgroundColor', 'backgroundImage', 'backgroundDim',
   'customBubbles', 'agentBubbleColor', 'agentTextColor', 'customerBubbleColor',
   'customerTextColor', 'customerNameColor', 'bubbleBorderEnabled',
-  'bubbleBorderColor', 'ambientGlowStrength', 'ambientGlowColor', 'themeAccentColor'
+  'bubbleBorderColor', 'ambientGlowStrength', 'ambientGlowColor', 'themeAccentColor',
+  'inactivityBarEnabled', 'inactivityLimitMinutes', 'inactivityGradientStartColor',
+  'inactivityGradientEndColor'
 ]);
 let writeQueue = Promise.resolve();
 

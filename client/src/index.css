@@ -407,7 +407,7 @@ body {
   bottom: 0;
   left: 0;
   min-width: 2px;
-  background: hsl(var(--genesys-liquid-hue) 76% 48% / 0.24);
+  background-color: color-mix(in srgb, var(--genesys-liquid-color) 24%, transparent);
   transition: width 1s linear, background-color 1s linear;
 }
 
@@ -419,12 +419,12 @@ body {
   height: 106%;
   content: "";
   border-radius: 50%;
-  background: hsl(var(--genesys-liquid-hue) 76% 48% / 0.18);
+  background-color: color-mix(in srgb, var(--genesys-liquid-color) 18%, transparent);
   animation: genesysLiquidWave 2.8s ease-in-out infinite alternate;
 }
 
 .genesys-inactivity-liquid-fill.is-expired {
-  background: rgb(220 38 38 / 0.3);
+  background-color: color-mix(in srgb, var(--genesys-liquid-color) 30%, transparent);
 }
 
 @keyframes genesysLiquidWave {

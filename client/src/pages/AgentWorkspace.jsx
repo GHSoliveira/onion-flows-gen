@@ -51,7 +51,6 @@ const readChatSort = (userId) => {
     return { ...DEFAULT_CHAT_SORT };
   }
 };
-const GENESYS_INACTIVITY_LIMIT_MS = 10 * 60 * 1000;
 const AUTO_GENESYS_HYDRATE_COOLDOWN_MS = 15 * 1000;
 const CHAT_DETAILS_CACHE_LIMIT = 16;
 const chatConversationId = (chat) => String(
@@ -78,6 +77,10 @@ const DEFAULT_CHAT_APPEARANCE = Object.freeze({
   ambientGlowStrength: 100,
   ambientGlowColor: '#2563eb',
   themeAccentColor: '#2563eb',
+  inactivityBarEnabled: true,
+  inactivityLimitMinutes: 10,
+  inactivityGradientStartColor: '#22c55e',
+  inactivityGradientEndColor: '#dc2626',
 });
 const chatAppearanceStorageKey = (userId) => `agentChatAppearance:${userId || 'anon'}`;
 const normalizeAppearanceColor = (value, fallback) => (
@@ -92,8 +95,10 @@ const normalizeChatAppearance = (value) => ({
   ...(value && typeof value === 'object' ? value : {}),
   customBubbles: value?.customBubbles === true,
   bubbleBorderEnabled: value?.bubbleBorderEnabled === true,
+  inactivityBarEnabled: value?.inactivityBarEnabled !== false,
   backgroundDim: normalizeAppearanceRange(value?.backgroundDim, DEFAULT_CHAT_APPEARANCE.backgroundDim, 0, 80),
   ambientGlowStrength: normalizeAppearanceRange(value?.ambientGlowStrength, DEFAULT_CHAT_APPEARANCE.ambientGlowStrength, 0, 200),
+  inactivityLimitMinutes: normalizeAppearanceRange(value?.inactivityLimitMinutes, DEFAULT_CHAT_APPEARANCE.inactivityLimitMinutes, 1, 60),
   backgroundColor: normalizeAppearanceColor(value?.backgroundColor, DEFAULT_CHAT_APPEARANCE.backgroundColor),
   agentBubbleColor: normalizeAppearanceColor(value?.agentBubbleColor, DEFAULT_CHAT_APPEARANCE.agentBubbleColor),
   agentTextColor: normalizeAppearanceColor(value?.agentTextColor, DEFAULT_CHAT_APPEARANCE.agentTextColor),
@@ -103,6 +108,8 @@ const normalizeChatAppearance = (value) => ({
   bubbleBorderColor: normalizeAppearanceColor(value?.bubbleBorderColor, DEFAULT_CHAT_APPEARANCE.bubbleBorderColor),
   ambientGlowColor: normalizeAppearanceColor(value?.ambientGlowColor, DEFAULT_CHAT_APPEARANCE.ambientGlowColor),
   themeAccentColor: normalizeAppearanceColor(value?.themeAccentColor, DEFAULT_CHAT_APPEARANCE.themeAccentColor),
+  inactivityGradientStartColor: normalizeAppearanceColor(value?.inactivityGradientStartColor, DEFAULT_CHAT_APPEARANCE.inactivityGradientStartColor),
+  inactivityGradientEndColor: normalizeAppearanceColor(value?.inactivityGradientEndColor, DEFAULT_CHAT_APPEARANCE.inactivityGradientEndColor),
 });
 const readChatAppearance = (userId) => {
   try {
@@ -351,21 +358,37 @@ const formatInactivityRemaining = (remainingMs) => {
 const HEADER_ICON_BUTTON_CLASS = 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-transparent transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent dark:hover:bg-slate-800';
 const COMPACT_HEADER_ICON_BUTTON_CLASS = 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-transparent transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent dark:hover:bg-slate-800';
 
-const GenesysInactivityLiquid = ({ chat }) => {
+const GenesysInactivityLiquid = ({ chat, appearance }) => {
+  const enabled = appearance?.inactivityBarEnabled !== false;
   const lastActivityAt = resolveGenesysLastActivityAt(chat);
-  const now = useSharedClock(Boolean(lastActivityAt));
+  const now = useSharedClock(enabled && Boolean(lastActivityAt));
 
-  if (!lastActivityAt) return null;
+  if (!enabled || !lastActivityAt) return null;
+  const limitMinutes = normalizeAppearanceRange(
+    appearance?.inactivityLimitMinutes,
+    DEFAULT_CHAT_APPEARANCE.inactivityLimitMinutes,
+    1,
+    60
+  );
+  const limitMs = limitMinutes * 60 * 1000;
+  const startColor = normalizeAppearanceColor(
+    appearance?.inactivityGradientStartColor,
+    DEFAULT_CHAT_APPEARANCE.inactivityGradientStartColor
+  );
+  const endColor = normalizeAppearanceColor(
+    appearance?.inactivityGradientEndColor,
+    DEFAULT_CHAT_APPEARANCE.inactivityGradientEndColor
+  );
   const elapsedMs = Math.max(0, now - lastActivityAt);
-  const progress = Math.min(1, elapsedMs / GENESYS_INACTIVITY_LIMIT_MS);
-  const remainingMs = Math.max(0, GENESYS_INACTIVITY_LIMIT_MS - elapsedMs);
-  const hue = Math.round(142 * (1 - progress));
+  const progress = Math.min(1, elapsedMs / limitMs);
+  const remainingMs = Math.max(0, limitMs - elapsedMs);
   const critical = progress >= 0.8;
   const expired = progress >= 1;
   const label = expired ? '0:00' : formatInactivityRemaining(remainingMs);
+  const limitLabel = Number.isInteger(limitMinutes) ? String(limitMinutes) : String(limitMinutes).replace('.', ',');
   const title = expired
-    ? 'Limite de 10 minutos atingido'
-    : `Encerramento automático em ${label}`;
+    ? `Limite visual de ${limitLabel} minuto(s) atingido`
+    : `Indicador visual chega ao fim em ${label}`;
 
   return (
     <>
@@ -374,7 +397,7 @@ const GenesysInactivityLiquid = ({ chat }) => {
           className={`genesys-inactivity-liquid-fill ${expired ? 'is-expired' : ''}`}
           style={{
             width: `${Math.max(2, progress * 100)}%`,
-            '--genesys-liquid-hue': hue,
+            '--genesys-liquid-color': `color-mix(in oklch, ${startColor} ${Math.round((1 - progress) * 100)}%, ${endColor} ${Math.round(progress * 100)}%)`,
           }}
         />
       </div>
@@ -3473,7 +3496,9 @@ const AgentWorkspace = () => {
     const preview = getLastMessagePreview(chat);
     const lastMessage = Array.isArray(chat?.messages) ? chat.messages[chat.messages.length - 1] : null;
     const unreadCount = Number(unreadByChatId[chat.id] || 0);
-    const showGenesysInactivity = isGenesysChatClient(chat) && Boolean(resolveGenesysLastActivityAt(chat));
+    const showGenesysInactivity = chatAppearance.inactivityBarEnabled !== false
+      && isGenesysChatClient(chat)
+      && Boolean(resolveGenesysLastActivityAt(chat));
     // Borda de selecao fica no shell INTERNO (fora do transform residual do motion)
     const shellClass = waitingTone
       ? (selected
@@ -3512,7 +3537,7 @@ const AgentWorkspace = () => {
           data-selected={selected ? 'true' : 'false'}
           data-chat-id={chatId}
         >
-          {showGenesysInactivity ? <GenesysInactivityLiquid chat={chat} /> : null}
+          {showGenesysInactivity ? <GenesysInactivityLiquid chat={chat} appearance={chatAppearance} /> : null}
           <button
             type="button"
             onClick={() => handleChatCardClick(chat)}
@@ -5839,6 +5864,79 @@ const AgentWorkspace = () => {
                           </span>
                           <input type="range" min="0" max="200" step="5" value={appearanceDraft.ambientGlowStrength} onChange={(event) => setAppearanceDraft((previous) => ({ ...previous, ambientGlowStrength: Number(event.target.value) }))} className="w-full" style={{ accentColor: appearanceDraft.ambientGlowColor }} />
                         </label>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="mb-2 text-[10px] font-bold uppercase tracking-wide text-slate-500">Indicador de inatividade</div>
+                      <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                        <label className="flex items-center justify-between gap-3">
+                          <span>
+                            <span className="block text-[10px] font-bold text-slate-700 dark:text-slate-200">Mostrar barra colorida nos cards</span>
+                            <span className="text-[9px] text-slate-400">Progresso desde a última mensagem</span>
+                          </span>
+                          <input
+                            type="checkbox"
+                            checked={appearanceDraft.inactivityBarEnabled !== false}
+                            onChange={(event) => setAppearanceDraft((previous) => ({ ...previous, inactivityBarEnabled: event.target.checked }))}
+                            className="h-4 w-4"
+                            style={{ accentColor: appearanceDraft.themeAccentColor }}
+                          />
+                        </label>
+                        {appearanceDraft.inactivityBarEnabled !== false ? (
+                          <div className="mt-3 space-y-3 border-t border-slate-100 pt-3 dark:border-slate-800">
+                            <label className="block">
+                              <span className="mb-1.5 flex items-center justify-between gap-3">
+                                <span className="text-[10px] font-bold text-slate-700 dark:text-slate-200">Tempo para completar</span>
+                                <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-slate-500">
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    max="60"
+                                    step="1"
+                                    value={appearanceDraft.inactivityLimitMinutes}
+                                    onChange={(event) => setAppearanceDraft((previous) => ({
+                                      ...previous,
+                                      inactivityLimitMinutes: normalizeAppearanceRange(event.target.value, previous.inactivityLimitMinutes, 1, 60),
+                                    }))}
+                                    className="h-7 w-14 rounded-lg border border-slate-200 bg-white px-2 text-right text-[10px] font-bold text-slate-700 outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                                  />
+                                  min
+                                </span>
+                              </span>
+                              <input
+                                type="range"
+                                min="1"
+                                max="60"
+                                step="1"
+                                value={appearanceDraft.inactivityLimitMinutes}
+                                onChange={(event) => setAppearanceDraft((previous) => ({ ...previous, inactivityLimitMinutes: Number(event.target.value) }))}
+                                className="w-full"
+                                style={{ accentColor: appearanceDraft.themeAccentColor }}
+                              />
+                            </label>
+                            <div className="grid grid-cols-2 gap-2">
+                              {[
+                                ['inactivityGradientStartColor', 'Cor inicial'],
+                                ['inactivityGradientEndColor', 'Cor final'],
+                              ].map(([field, label]) => (
+                                <label key={field} className="flex items-center justify-between rounded-lg bg-slate-50 px-2.5 py-2 dark:bg-slate-800/70">
+                                  <span className="text-[9px] font-semibold text-slate-600 dark:text-slate-300">{label}</span>
+                                  <input
+                                    type="color"
+                                    value={appearanceDraft[field]}
+                                    onChange={(event) => setAppearanceDraft((previous) => ({ ...previous, [field]: event.target.value }))}
+                                    className="h-7 w-8 cursor-pointer rounded-md border-0 bg-transparent p-0"
+                                  />
+                                </label>
+                              ))}
+                            </div>
+                            <div className="h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800" title="Prévia da progressão de cores">
+                              <div className="h-full w-full rounded-full" style={{ background: `linear-gradient(90deg, ${appearanceDraft.inactivityGradientStartColor}, ${appearanceDraft.inactivityGradientEndColor})` }} />
+                            </div>
+                            <p className="text-[9px] leading-4 text-slate-400">Esta preferência muda somente o indicador visual. O tempo real de encerramento continua sendo controlado pelo Genesys.</p>
+                          </div>
+                        ) : null}
                       </div>
                     </div>
 

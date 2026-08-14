@@ -1,6 +1,6 @@
 # Onion Flows — pacote local companion
 
-Versão publicada: 5.3.35
+Versão publicada: 5.3.36
 
 ## Requisitos
 

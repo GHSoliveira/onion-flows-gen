@@ -16,7 +16,14 @@ test('preferências locais sobrevivem a nova leitura e descartam campos não per
       preferences: {
         name: 'Agente Local',
         theme: 'dark',
-        appearance: { themeAccentColor: '#2563eb', piiCliente: 'não salvar' },
+        appearance: {
+          themeAccentColor: '#2563eb',
+          inactivityBarEnabled: false,
+          inactivityLimitMinutes: 25,
+          inactivityGradientStartColor: '#22c55e',
+          inactivityGradientEndColor: '#dc2626',
+          piiCliente: 'não salvar'
+        },
         sort: { enabled: true, mode: 'agent_wait', direction: 'asc' }
       }
     });
@@ -24,6 +31,10 @@ test('preferências locais sobrevivem a nova leitura e descartam campos não per
     assert.equal(restored.name, 'Agente Local');
     assert.equal(restored.theme, 'dark');
     assert.equal(restored.appearance.themeAccentColor, '#2563eb');
+    assert.equal(restored.appearance.inactivityBarEnabled, false);
+    assert.equal(restored.appearance.inactivityLimitMinutes, 25);
+    assert.equal(restored.appearance.inactivityGradientStartColor, '#22c55e');
+    assert.equal(restored.appearance.inactivityGradientEndColor, '#dc2626');
     assert.equal(restored.appearance.piiCliente, undefined);
     assert.deepEqual(restored.sort, { enabled: true, mode: 'agent_wait', direction: 'asc' });
     assert.doesNotMatch(await readFile(file, 'utf8'), /piiCliente|não salvar/);
