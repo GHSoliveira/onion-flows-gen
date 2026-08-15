@@ -812,7 +812,7 @@ const AgentWorkspace = () => {
   });
   const [routerProbe, setRouterProbe] = useState({ chatId: '', ip: '', status: 'idle', url: '', openPorts: [], pickerOpen: false });
   const [wrapupPanel, setWrapupPanel] = useState({
-    open: false, loading: false, codes: [], query: '', selected: null, submitting: false, error: ''
+    open: false, loading: false, participantId: '', codes: [], query: '', selected: null, submitting: false, error: ''
   });
   const [unreadByChatId, setUnreadByChatId] = useState({});
   const [mediaModal, setMediaModal] = useState({
@@ -861,6 +861,7 @@ const AgentWorkspace = () => {
     queueResults: [],
     selectedQueue: null,
     wrapupCodes: [],
+    participantId: '',
     wrapupQuery: '',
     selectedWrapup: null,
     error: '',
@@ -2556,7 +2557,7 @@ const AgentWorkspace = () => {
   const handleClose = async () => {
     if (isGenesysChatClient(selectedChat)) {
       setWrapupPanel({
-        open: true, loading: true, codes: [], query: '', selected: null, submitting: false, error: ''
+        open: true, loading: true, participantId: '', codes: [], query: '', selected: null, submitting: false, error: ''
       });
       try {
         const response = await apiRequest(`/chats/${encodeURIComponent(selectedChat.id)}/genesys-wrapupcodes`);
@@ -2565,6 +2566,7 @@ const AgentWorkspace = () => {
         setWrapupPanel((previous) => ({
           ...previous,
           loading: false,
+          participantId: String(data.participantId || ''),
           codes: Array.isArray(data.codes) ? data.codes : [],
           error: ''
         }));
@@ -2615,6 +2617,7 @@ const AgentWorkspace = () => {
         body: JSON.stringify({
           wrapupCode: wrapupPanel.selected.id,
           wrapupName: wrapupPanel.selected.name,
+          participantId: wrapupPanel.participantId,
           notes: ''
         })
       });
@@ -2622,7 +2625,7 @@ const AgentWorkspace = () => {
       if (!response?.ok || data?.confirmed !== true) {
         throw new Error(data?.error || 'O Genesys não confirmou a tabulação');
       }
-      setWrapupPanel({ open: false, loading: false, codes: [], query: '', selected: null, submitting: false, error: '' });
+      setWrapupPanel({ open: false, loading: false, participantId: '', codes: [], query: '', selected: null, submitting: false, error: '' });
       setSelectedChat(null);
       toast.success('Atendimento finalizado e tabulado no Genesys');
     } catch (error) {
@@ -2647,6 +2650,7 @@ const AgentWorkspace = () => {
           queueResults: [],
           selectedQueue: null,
           wrapupCodes: [],
+          participantId: '',
           wrapupQuery: '',
           selectedWrapup: null,
           error: '',
@@ -2675,6 +2679,7 @@ const AgentWorkspace = () => {
         queueResults: [],
         selectedQueue: null,
         wrapupCodes: [],
+        participantId: '',
         wrapupQuery: '',
         selectedWrapup: null,
         error: '',
@@ -2780,6 +2785,7 @@ const AgentWorkspace = () => {
       step: 'wrapup',
       selectedQueue: queue,
       wrapupCodes: [],
+      participantId: '',
       wrapupQuery: '',
       selectedWrapup: null,
       error: ''
@@ -2793,6 +2799,7 @@ const AgentWorkspace = () => {
         ...previous,
         loading: false,
         wrapupCodes: Array.isArray(data.codes) ? data.codes : [],
+        participantId: String(data.participantId || ''),
         error: ''
       }));
     } catch (error) {
@@ -2821,6 +2828,7 @@ const AgentWorkspace = () => {
           queueId: queue.id,
           queueName: queue.name,
           divisionId: queue.divisionId || '',
+          participantId: transferModal.participantId,
           wrapupCode: wrapup.id,
           wrapupName: wrapup.name,
           notes: ''
@@ -2893,6 +2901,7 @@ const AgentWorkspace = () => {
         queueResults: [],
         selectedQueue: null,
         wrapupCodes: [],
+        participantId: '',
         wrapupQuery: '',
         selectedWrapup: null,
         error: '',

@@ -1607,6 +1607,7 @@ export const relayTransferGenesysWithWrapup = async ({
   queueId,
   queueName = '',
   divisionId = '',
+  participantId = '',
   wrapupCode,
   wrapupName = '',
   notes = ''
@@ -1624,6 +1625,7 @@ export const relayTransferGenesysWithWrapup = async ({
     queueId: String(queueId),
     queueName: pickString(queueName),
     divisionId: GENESYS_UUID_RE.test(String(divisionId || '')) ? String(divisionId) : '',
+    participantId: GENESYS_UUID_RE.test(String(participantId || '')) ? String(participantId) : '',
     wrapupCode: String(wrapupCode),
     wrapupName: pickString(wrapupName),
     notes: String(notes || '').slice(0, 1000),
@@ -1633,7 +1635,7 @@ export const relayTransferGenesysWithWrapup = async ({
 };
 
 export const relayFinalizeGenesysWithWrapup = async ({
-  chat, agentId = null, wrapupCode, wrapupName = '', notes = ''
+  chat, agentId = null, participantId = '', wrapupCode, wrapupName = '', notes = ''
 } = {}) => {
   if (!isGenesysChat(chat)) return { ok: false, reason: 'not_genesys' };
   const convId = resolveGenesysConvId(chat);
@@ -1644,6 +1646,7 @@ export const relayFinalizeGenesysWithWrapup = async ({
   return emitCmdToExtensionWithAck(targetAgentId, 'cmd:finalizar_com_tabulacao', {
     convId,
     chatId: chat.id,
+    participantId: GENESYS_UUID_RE.test(String(participantId || '')) ? String(participantId) : '',
     wrapupCode: String(wrapupCode),
     wrapupName: pickString(wrapupName),
     notes: String(notes || '').slice(0, 1000),

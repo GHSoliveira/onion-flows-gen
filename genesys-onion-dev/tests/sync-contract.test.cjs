@@ -201,8 +201,18 @@ test("transferencia Genesys exige fila pesquisada, conversa ativa e tabulacao co
   assert.match(background, /conversa_nao_encontrada_na_lista_ativa/);
   assert.match(background, /participante_agente_diverge_da_conversa_ativa/);
   assert.match(background, /participante_agente_nao_corresponde_ao_usuario_logado/);
+  assert.match(background, /participante_da_tabulacao_mudou/);
+  assert.match(background, /listGenesysWrapupCodes[\s\S]*?requireCurrentUser:\s*true/);
   assert.match(background, /\/replace\/queue/);
   assert.match(background, /wrapup:\s*\{\s*provisional:\s*true,\s*code:\s*selected\.id/);
   assert.match(background, /transferencia_realizada_mas_genesys_nao_confirmou_a_tabulacao/);
   assert.match(background, /motivo:\s*"genesys_transfer_confirmed"/);
+});
+
+test("observador passivo ignora ids de tabulacao e endpoints de acao", async () => {
+  const focus = await readFile(path.join(extensionRoot, "genesys-focus.js"), "utf8");
+  assert.match(focus, /function isObservableConversationDataPath/);
+  assert.match(focus, /return "ignored"/);
+  assert.match(focus, /!isObservableConversationDataPath\(path\)/);
+  assert.doesNotMatch(focus, /if \(\/\\\/participants\\\//);
 });

@@ -3236,7 +3236,7 @@ async function loadGenesysWrapupContext(conversationId, { requireCurrentUser = f
 }
 async function listGenesysWrapupCodes(payload = {}) {
   const conversationId = String(payload.convId || payload.conversationId || "");
-  const context = await loadGenesysWrapupContext(conversationId);
+  const context = await loadGenesysWrapupContext(conversationId, { requireCurrentUser: true });
   return {
     ok: true,
     convId: conversationId,
@@ -3356,6 +3356,7 @@ async function transferGenesysWithWrapup(payload = {}) {
   const conversationId = String(payload.convId || payload.conversationId || "");
   const queueId = String(payload.queueId || "");
   const wrapupCode = String(payload.wrapupCode || "");
+  const expectedParticipantId = String(payload.participantId || "");
   if (!UUID_RE.test(conversationId)) throw new Error("conversationId_invalido");
   if (!UUID_RE.test(queueId)) throw new Error("queueId_invalido");
   if (!UUID_RE.test(wrapupCode)) throw new Error("wrapup_code_invalido");
@@ -3371,6 +3372,10 @@ async function transferGenesysWithWrapup(payload = {}) {
     throw new Error("nome_da_fila_diverge_da_pesquisa");
   }
   const context = await loadGenesysWrapupContext(conversationId, { requireCurrentUser: true });
+  if (
+    UUID_RE.test(expectedParticipantId)
+    && context.participantId !== expectedParticipantId
+  ) throw new Error("participante_da_tabulacao_mudou");
   const selected = context.codes.find((code) => code.id === wrapupCode);
   if (!selected) throw new Error("wrapup_code_nao_pertence_ao_atendimento");
   if (context.participant?.endTime || !hasActiveAgentMessaging(context.detail)) {
@@ -3496,8 +3501,13 @@ async function transferGenesysWithWrapup(payload = {}) {
 async function finalizeGenesysWithWrapup(payload = {}) {
   const conversationId = String(payload.convId || payload.conversationId || "");
   const wrapupCode = String(payload.wrapupCode || "");
+  const expectedParticipantId = String(payload.participantId || "");
   if (!UUID_RE.test(wrapupCode)) throw new Error("wrapup_code_invalido");
-  const context = await loadGenesysWrapupContext(conversationId);
+  const context = await loadGenesysWrapupContext(conversationId, { requireCurrentUser: true });
+  if (
+    UUID_RE.test(expectedParticipantId)
+    && context.participantId !== expectedParticipantId
+  ) throw new Error("participante_da_tabulacao_mudou");
   const selected = context.codes.find((code) => code.id === wrapupCode);
   if (!selected) throw new Error("wrapup_code_nao_pertence_ao_atendimento");
   const participantPath = `/api/v2/conversations/messages/${conversationId}/participants/${context.participantId}`;

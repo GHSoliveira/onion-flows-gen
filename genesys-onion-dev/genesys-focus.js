@@ -112,10 +112,16 @@
   function routeKind(path) {
     if (/\/messages\/bulk$/i.test(path)) return "messages_bulk";
     if (/\/communications\//i.test(path)) return "message_send";
-    if (/\/participants\//i.test(path)) return "participant";
     if (/\/conversations\/messages\/[0-9a-f-]{36}$/i.test(path)) return "conversation_detail";
+    if (/\/conversations\/[0-9a-f-]{36}$/i.test(path)) return "conversation_detail";
     if (/\/conversations(?:\/)?$/i.test(path)) return "conversation_list";
-    return "other";
+    // Endpoints de ação e catálogo (participants, wrapupcodes,
+    // wrapup, replace/queue etc.) também contêm UUIDs, mas suas entidades
+    // não são conversas. Nunca devem alimentar o espelho passivo.
+    return "ignored";
+  }
+  function isObservableConversationDataPath(path) {
+    return ["messages_bulk", "conversation_detail", "conversation_list"].includes(routeKind(path));
   }
   function observedItemHasMedia(item) {
     const queue = [
@@ -517,7 +523,11 @@
     });
   }
   function publishObservation({ path, method, status, payload, transport }) {
-    if (!observationEnabled || !OBSERVED_PATH_RE.test(path)) return;
+    if (
+      !observationEnabled
+      || !OBSERVED_PATH_RE.test(path)
+      || !isObservableConversationDataPath(path)
+    ) return;
     const conversations = collectObservation(payload, path);
     window.postMessage({
       source: "onion-dev-network-observation",
@@ -533,7 +543,7 @@
   function observeFetchResponse(response, url, method) {
     if (!observationEnabled || !response || typeof response.clone !== "function") return;
     const path = requestPath(url || response.url);
-    if (!path || !OBSERVED_PATH_RE.test(path)) return;
+    if (!path || !OBSERVED_PATH_RE.test(path) || !isObservableConversationDataPath(path)) return;
     const contentType = String(response.headers?.get?.("content-type") || "").toLowerCase();
     const declaredSize = Number(response.headers?.get?.("content-length") || 0);
     if (!contentType.includes("json") || declaredSize > MAX_OBSERVED_RESPONSE_BYTES) return;
@@ -547,7 +557,7 @@
   function observeXhrResponse(xhr) {
     if (!observationEnabled || !xhr) return;
     const path = requestPath(xhr.__onionDevUrl);
-    if (!path || !OBSERVED_PATH_RE.test(path)) return;
+    if (!path || !OBSERVED_PATH_RE.test(path) || !isObservableConversationDataPath(path)) return;
     const contentType = String(xhr.getResponseHeader?.("content-type") || "").toLowerCase();
     if (!contentType.includes("json") || xhr.responseType === "blob" || xhr.responseType === "arraybuffer") return;
     let text = "";

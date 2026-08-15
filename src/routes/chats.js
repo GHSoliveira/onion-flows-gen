@@ -2523,6 +2523,7 @@ router.post('/:id/transfer-genesys', authenticate, authorize(CHAT_OPERATIONAL_RO
       queueId: asIdentifier(req.body?.queueId),
       queueName: String(req.body?.queueName || ''),
       divisionId: asIdentifier(req.body?.divisionId),
+      participantId: asIdentifier(req.body?.participantId),
       wrapupCode: asIdentifier(req.body?.wrapupCode),
       wrapupName: String(req.body?.wrapupName || ''),
       notes: String(req.body?.notes || '')
@@ -2661,6 +2662,7 @@ router.post('/:id/close-genesys', authenticate, authorize(CHAT_OPERATIONAL_ROLES
     const result = await relayFinalizeGenesysWithWrapup({
       chat,
       agentId: req.user?.id || chat.agentId || null,
+      participantId: asIdentifier(req.body?.participantId),
       wrapupCode: asIdentifier(req.body?.wrapupCode),
       wrapupName: String(req.body?.wrapupName || ''),
       notes: String(req.body?.notes || '')

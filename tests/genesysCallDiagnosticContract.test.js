@@ -13,7 +13,7 @@ async function source(name) {
 test('extensao de diagnostico e independente e nao ganha acesso a segredos', async () => {
   const manifest = JSON.parse(await source('manifest.json'));
   assert.equal(manifest.name, 'Onion Sync Diagnostic');
-  assert.equal(manifest.version, '0.2.0');
+  assert.equal(manifest.version, '0.2.1');
   assert.deepEqual(manifest.permissions.sort(), ['storage', 'tabs']);
   assert.deepEqual(manifest.host_permissions, ['https://apps.sae1.pure.cloud/*']);
   for (const forbidden of ['cookies', 'debugger', 'downloads', 'webRequest', 'webRequestBlocking']) {
@@ -34,6 +34,9 @@ test('probe observa transporte existente sem criar chamada adicional ao Genesys'
   assert.match(probe, /kind: "transport_state"/);
   assert.match(probe, /requestedIds: parseRequestedMessageIds/);
   assert.match(probe, /hasText: Boolean/);
+  assert.match(probe, /return "ignored"/);
+  assert.match(probe, /!observableConversationPath\(route\)/);
+  assert.match(probe, /Array\.isArray\(item\.participants\)/);
   assert.doesNotMatch(probe, /authorization|cookie|headers\s*:/i);
   assert.doesNotMatch(probe, /text:\s*cleanText|textBody:\s*|messageText:\s*/);
 });

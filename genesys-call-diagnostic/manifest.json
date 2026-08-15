@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "minimum_chrome_version": "111",
   "name": "Onion Sync Diagnostic",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Captura local e sanitizada da sincronização de chats e ligações no Genesys.",
   "permissions": ["storage", "tabs"],
   "host_permissions": ["https://apps.sae1.pure.cloud/*"],

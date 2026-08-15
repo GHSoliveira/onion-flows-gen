@@ -94,8 +94,9 @@
   function participantUserId(participant = {}) {
     const direct = cleanId(participant.userId);
     if (direct) return direct;
-    const match = String(participant.userUri || "").match(UUID_RE);
-    return cleanId(match?.[0]);
+    const match = String(participant.userUri || "")
+      .match(/\/api\/v2\/users\/([0-9a-f-]{36})(?:$|[/?#])/i);
+    return cleanId(match?.[1]);
   }
 
   function sanitizeParticipant(participant = {}) {
@@ -178,6 +179,14 @@
         : [payload];
     return candidates
       .slice(0, 100)
+      .filter((item) => (
+        item
+        && typeof item === "object"
+        && (
+          Array.isArray(item.participants)
+          || Array.isArray(item?.conversation?.participants)
+        )
+      ))
       .map((item) => sanitizeConversation(item, fallbackId))
       .filter(Boolean);
   }
@@ -193,8 +202,8 @@
   }
 
   function observableConversationPath(path) {
-    if (!/^\/api\/v2\/conversations(?:\/|$)/i.test(path)) return false;
-    return !/\/communications\/|\/media\/|\/uploads(?:\/|$)/i.test(path);
+    return ["active_roster", "message_bulk", "message_detail", "conversation_detail"]
+      .includes(routeKind(path));
   }
 
   function routeKind(path) {
@@ -202,7 +211,7 @@
     if (/\/messages\/bulk$/i.test(path)) return "message_bulk";
     if (/^\/api\/v2\/conversations\/messages\/[0-9a-f-]{36}\/?$/i.test(path)) return "message_detail";
     if (/^\/api\/v2\/conversations\/[0-9a-f-]{36}\/?$/i.test(path)) return "conversation_detail";
-    return "conversation_other";
+    return "ignored";
   }
 
   function pagePath() {
@@ -223,6 +232,7 @@
   }
 
   function publishNetwork({ transport, route = "", topic = "", status = 0, payload, fallbackId = "" }) {
+    if (route && !observableConversationPath(route)) return;
     const conversations = extractConversations(payload, fallbackId);
     if (!conversations.length) return;
     post({
