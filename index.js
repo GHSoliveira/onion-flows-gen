@@ -131,16 +131,6 @@ if (!COMPANION_MODE_EARLY) {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const LOCAL_EXTENSION_VERSION = (() => {
-  try {
-    const manifestPath = path.join(__dirname, 'genesys-onion-dev', 'manifest.json');
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    return String(manifest?.version || '').trim() || null;
-  } catch {
-    return null;
-  }
-})();
-
 const PORT = process.env.PORT || 3001;
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
 const NODE_ENV = process.env.NODE_ENV || 'development';
@@ -545,7 +535,6 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     companion: COMPANION_MODE,
-    extensionVersion: COMPANION_MODE ? LOCAL_EXTENSION_VERSION : null,
   });
 });
 

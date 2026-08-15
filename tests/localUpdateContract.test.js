@@ -45,10 +45,10 @@ test('botão atualiza, abre Onion e recarrega Onion, Genesys e a extensão', asy
     starter.indexOf("$frontendBuild = Start-Process") < starter.indexOf("'stop-sandbox.ps1'") ,
     'o frontend deve compilar antes de encerrar o runtime atual'
   );
-  // Atualização feita pelo BAT também recarrega uma extensão já instalada.
-  assert.match(server, /extensionVersion: COMPANION_MODE \? LOCAL_EXTENSION_VERSION : null/);
-  assert.match(background, /function reconcileInstalledExtensionVersion\(\)/);
-  assert.match(background, /chrome\.runtime\.getManifest\(\)\?\.version/);
-  assert.match(background, /reconcileInstalledExtensionVersion\(\)\.catch/);
+  // Somente o comando explícito pode recarregar abas/extensão. Divergência
+  // de versão nunca dispara um ciclo automático no keepalive.
+  assert.doesNotMatch(server, /extensionVersion/);
+  assert.doesNotMatch(background, /reconcileInstalledExtensionVersion/);
+  assert.doesNotMatch(background, /chrome\.runtime\.getManifest\(\)\?\.version/);
   assert.match(ignore, /sandbox\/update-status\.txt/);
 });

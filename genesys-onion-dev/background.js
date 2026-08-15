@@ -1,6 +1,6 @@
 importScripts("external-status.js", "lib/socket.io.min.js");
 
-const EXTENSION_BUILD = "2026.08.14.2";
+const EXTENSION_BUILD = "2026.08.14.3";
 const SETTINGS_KEY = "onionDevSettings";
 const AUTH_KEY = "onionDevAuth";
 const COMMUNICATIONS_KEY = "onionDevCommunications";
@@ -102,7 +102,6 @@ const outboundRateWindow = [];
 const outboundMediaRateWindow = [];
 const outboundMediaConversationsInFlight = new Set();
 let activeOutboundMediaUploads = 0;
-let localRuntimeReloadScheduled = false;
 const notificationTimers = new Map();
 const notificationSnapshots = new Map();
 const passiveCallDisconnectTimers = new Map();
@@ -5533,23 +5532,6 @@ async function reloadOnionAndGenesysTabs(baseUrl) {
   return targets.length;
 }
 
-async function reconcileInstalledExtensionVersion() {
-  if (localRuntimeReloadScheduled) return;
-  const cfg = await settings();
-  const baseUrl = safeBaseUrl(cfg.baseUrl);
-  const response = await fetch(`${baseUrl}/health`, { cache: "no-store" });
-  if (!response.ok) return;
-  const health = await response.json().catch(() => ({}));
-  const availableVersion = String(health?.extensionVersion || "").trim();
-  const loadedVersion = String(chrome.runtime.getManifest()?.version || "").trim();
-  if (!availableVersion || !loadedVersion || availableVersion === loadedVersion) return;
-
-  localRuntimeReloadScheduled = true;
-  log("info", "Nova versão local detectada", `${loadedVersion} → ${availableVersion}`);
-  await reloadOnionAndGenesysTabs(baseUrl).catch(() => {});
-  setTimeout(() => chrome.runtime.reload(), 1000);
-}
-
 async function runLocalCompanionUpdate(requestedBaseUrl = "") {
   const [cfg, credentials] = await Promise.all([settings(), auth()]);
   if (!credentials?.token) throw new Error("Faça login no Onion antes de atualizar");
@@ -5625,7 +5607,6 @@ chrome.alarms.onAlarm.addListener((alarm) => {
       schedulePeriodicAuthoritativeRosterAudit();
     })
     .catch(() => {});
-  reconcileInstalledExtensionVersion().catch(() => {});
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
