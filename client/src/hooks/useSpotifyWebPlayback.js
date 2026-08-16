@@ -51,7 +51,15 @@ const desiredUriForUrl = (value) => {
 
 const emptyPlayback = { duration: 0, position: 0 };
 const emptyMetadata = { title: 'Spotify', artist: '', thumbnailUrl: '', uri: '', contextUri: '' };
+const emptyTrackWindow = { previous: [], next: [] };
 const DEVICE_READY_TIMEOUT_MS = 18_000;
+
+const summarizeTrack = (track) => ({
+  title: String(track?.name || 'Faixa'),
+  artist: Array.isArray(track?.artists) ? track.artists.map((artist) => artist?.name).filter(Boolean).join(', ') : '',
+  thumbnailUrl: String(track?.album?.images?.[0]?.url || track?.images?.[0]?.url || ''),
+  uri: String(track?.uri || ''),
+});
 
 export const useSpotifyWebPlayback = ({ connected, contentUrl, initialVolume = 0.55 }) => {
   const playerRef = useRef(null);
@@ -68,6 +76,7 @@ export const useSpotifyWebPlayback = ({ connected, contentUrl, initialVolume = 0
   const [deviceId, setDeviceId] = useState('');
   const [metadata, setMetadata] = useState(emptyMetadata);
   const [playback, setPlayback] = useState(emptyPlayback);
+  const [trackWindow, setTrackWindow] = useState(emptyTrackWindow);
   const [volume, setVolumeState] = useState(() => {
     const parsed = Number(initialVolume);
     return Number.isFinite(parsed) ? Math.min(1, Math.max(0, parsed)) : 0.55;
@@ -85,6 +94,14 @@ export const useSpotifyWebPlayback = ({ connected, contentUrl, initialVolume = 0
     playingRef.current = nextPlaying;
     setPlayback(nextPlayback);
     setPlaying(nextPlaying);
+    setTrackWindow({
+      previous: Array.isArray(state.track_window?.previous_tracks)
+        ? state.track_window.previous_tracks.slice(-2).map(summarizeTrack)
+        : [],
+      next: Array.isArray(state.track_window?.next_tracks)
+        ? state.track_window.next_tracks.slice(0, 3).map(summarizeTrack)
+        : [],
+    });
     if (track) {
       setMetadata({
         title: String(track.name || 'Spotify'),
@@ -110,6 +127,7 @@ export const useSpotifyWebPlayback = ({ connected, contentUrl, initialVolume = 0
       setPhase('idle');
       setMetadata(emptyMetadata);
       setPlayback(emptyPlayback);
+      setTrackWindow(emptyTrackWindow);
       return undefined;
     }
 
@@ -274,6 +292,25 @@ export const useSpotifyWebPlayback = ({ connected, contentUrl, initialVolume = 0
     setPlaying(true);
   }, [activateDevice, contentUrl, metadata.contextUri, metadata.uri, ready]);
 
+  const playTrack = useCallback(async (trackUri) => {
+    const normalizedTrackUri = String(trackUri || '');
+    if (!playerRef.current || !ready || !normalizedTrackUri.startsWith('spotify:track:')) {
+      throw new Error('spotify_faixa_invalida');
+    }
+    setError('');
+    const currentDeviceId = await activateDevice();
+    const contentBody = playbackBodyForUrl(contentUrl);
+    const body = contentBody?.context_uri
+      ? { context_uri: contentBody.context_uri, offset: { uri: normalizedTrackUri } }
+      : { uris: [normalizedTrackUri] };
+    await spotifyApiRequest(`/me/player/play?device_id=${encodeURIComponent(currentDeviceId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    });
+    playingRef.current = true;
+    setPlaying(true);
+  }, [activateDevice, contentUrl, ready]);
+
   const pause = useCallback(async () => {
     if (!playerRef.current || !ready) return;
     await playerRef.current.pause();
@@ -288,6 +325,18 @@ export const useSpotifyWebPlayback = ({ connected, contentUrl, initialVolume = 0
     setPlayback((current) => ({ ...current, position: 0 }));
     playingRef.current = true;
     setPlaying(true);
+  }, [ready]);
+
+  const previousTrack = useCallback(async () => {
+    if (!playerRef.current || !ready) return;
+    setError('');
+    await playerRef.current.previousTrack();
+  }, [ready]);
+
+  const nextTrack = useCallback(async () => {
+    if (!playerRef.current || !ready) return;
+    setError('');
+    await playerRef.current.nextTrack();
   }, [ready]);
 
   const seek = useCallback(async (seconds) => {
@@ -324,10 +373,14 @@ export const useSpotifyWebPlayback = ({ connected, contentUrl, initialVolume = 0
     deviceId,
     metadata,
     playback,
+    trackWindow,
     volume,
     play,
+    playTrack,
     pause,
     restart,
+    previousTrack,
+    nextTrack,
     seek,
     setVolume,
     retry,

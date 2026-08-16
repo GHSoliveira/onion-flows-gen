@@ -1,18 +1,19 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { AudioLines, ChevronDown, ExternalLink, Music2, Pause, Play, RotateCcw, Save, Trash2, Volume2, VolumeX } from 'lucide-react';
+import { AudioLines, ChevronDown, ExternalLink, Music2, Pause, Play, RotateCcw, Save, SkipBack, SkipForward, Trash2, Volume2, VolumeX } from 'lucide-react';
 import {
   getPlaybackSafetySnapshot,
   subscribePlaybackSafety,
 } from '../services/playbackSafety';
 import { normalizeSpotifyContentUrl } from '../utils/spotifyPlayer';
 import SpotifyAccountSettings from './SpotifyAccountSettings';
-import { getSpotifyAuthSnapshot, subscribeSpotifyAuth } from '../services/spotifyAuth';
+import { getSpotifyAuthSnapshot, spotifyApiRequest, subscribeSpotifyAuth } from '../services/spotifyAuth';
 import { useSpotifyWebPlayback } from '../hooks/useSpotifyWebPlayback';
 
 const SPOTIFY_BRIDGE_PATH = '/spotify-embed-bridge.html';
 const SPOTIFY_BRIDGE_COMMAND = 'onion:spotify:bridge:command';
 const SPOTIFY_BRIDGE_EVENT = 'onion:spotify:bridge:event';
 const spotifyMetadataCache = new Map();
+const spotifyAlbumTracksCache = new Map();
 
 const formatPlaybackTime = (milliseconds) => {
   const seconds = Math.max(0, Math.floor((Number(milliseconds) || 0) / 1000));
@@ -36,6 +37,35 @@ const loadSpotifyMetadata = async (url, signal) => {
   };
   spotifyMetadataCache.set(normalized, metadata);
   return metadata;
+};
+
+const loadSpotifyAlbumTracks = async (url) => {
+  const normalized = normalizeSpotifyContentUrl(url);
+  if (!normalized) return [];
+  const parsed = new URL(normalized);
+  const [type, id] = parsed.pathname.split('/').filter(Boolean);
+  if (type !== 'album' || !id) return [];
+  if (spotifyAlbumTracksCache.has(normalized)) return spotifyAlbumTracksCache.get(normalized);
+  const request = spotifyApiRequest(`/albums/${encodeURIComponent(id)}`)
+    .then((response) => response.json())
+    .then((album) => {
+      const thumbnailUrl = String(album?.images?.[0]?.url || '');
+      return (Array.isArray(album?.tracks?.items) ? album.tracks.items : [])
+        .filter((track) => String(track?.uri || '').startsWith('spotify:track:'))
+        .map((track) => ({
+          uri: String(track.uri),
+          title: String(track.name || 'Faixa'),
+          artist: Array.isArray(track.artists) ? track.artists.map((artist) => artist?.name).filter(Boolean).join(', ') : '',
+          thumbnailUrl,
+          trackNumber: Number(track.track_number) || 0,
+        }));
+    })
+    .catch((error) => {
+      spotifyAlbumTracksCache.delete(normalized);
+      throw error;
+    });
+  spotifyAlbumTracksCache.set(normalized, request);
+  return request;
 };
 
 const spotifyStorageKey = (userId) => `onionSpotifyContent:${userId || 'anon'}`;
@@ -479,6 +509,8 @@ const SpotifyPremiumPlayer = ({ userId, profile }) => {
   const [draftUrl, setDraftUrl] = useState(() => readSavedUrl(userId));
   const [actionError, setActionError] = useState('');
   const [fallbackMetadata, setFallbackMetadata] = useState({ title: 'Spotify Premium', thumbnailUrl: '' });
+  const [albumTracks, setAlbumTracks] = useState([]);
+  const [albumTracksLoading, setAlbumTracksLoading] = useState(false);
   const accountProduct = String(profile?.product || '').toLowerCase();
   const accountNeedsPremium = Boolean(accountProduct && accountProduct !== 'premium');
   const spotify = useSpotifyWebPlayback({
@@ -517,6 +549,31 @@ const SpotifyPremiumPlayer = ({ userId, profile }) => {
       .then((nextMetadata) => nextMetadata && setFallbackMetadata(nextMetadata))
       .catch(() => {});
     return () => controller.abort();
+  }, [savedUrl]);
+
+  useEffect(() => {
+    const normalized = normalizeSpotifyContentUrl(savedUrl);
+    const type = normalized ? new URL(normalized).pathname.split('/').filter(Boolean)[0] : '';
+    if (type !== 'album') {
+      setAlbumTracks([]);
+      setAlbumTracksLoading(false);
+      return undefined;
+    }
+    let disposed = false;
+    setAlbumTracksLoading(true);
+    loadSpotifyAlbumTracks(normalized)
+      .then((tracks) => {
+        if (!disposed) setAlbumTracks(tracks);
+      })
+      .catch((error) => {
+        if (!disposed && error?.name !== 'AbortError') setAlbumTracks([]);
+      })
+      .finally(() => {
+        if (!disposed) setAlbumTracksLoading(false);
+      });
+    return () => {
+      disposed = true;
+    };
   }, [savedUrl]);
 
   useEffect(() => {
@@ -570,6 +627,10 @@ const SpotifyPremiumPlayer = ({ userId, profile }) => {
     runAction(() => spotify.seek((playback.duration * ratio) / 1000));
   };
 
+  const togglePlayback = () => {
+    runAction(spotify.playing ? spotify.pause : spotify.play);
+  };
+
   const connectionStage = {
     'validating-token': 'validando sessão',
     'loading-sdk': 'carregando SDK',
@@ -609,9 +670,9 @@ const SpotifyPremiumPlayer = ({ userId, profile }) => {
             <span className="mt-1 block h-0.5 overflow-hidden rounded-full bg-white/15"><span className="block h-full rounded-full bg-white/80" style={{ width: `${playbackPercent}%` }} /></span>
           </button>
         ) : null}
-        <button type="button" onClick={() => runAction(spotify.restart)} disabled={!spotify.ready || Boolean(safetyReason)} className="hidden h-6 w-6 shrink-0 items-center justify-center rounded-full text-white/55 transition hover:bg-white/10 hover:text-white disabled:opacity-30 lg:flex" title="Reiniciar música" aria-label="Reiniciar música"><RotateCcw size={11} /></button>
-        <button type="button" onClick={() => runAction(spotify.play)} disabled={!spotify.ready || Boolean(safetyReason) || !savedUrl} className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full shadow-sm transition ${spotify.playing && !safetyReason ? 'bg-[#1DB954] text-white' : 'bg-white text-black hover:scale-105'} disabled:cursor-default disabled:opacity-45`} title="Reproduzir Spotify" aria-label="Reproduzir Spotify"><Play size={13} fill="currentColor" className="translate-x-px" /></button>
-        <button type="button" onClick={() => runAction(spotify.pause)} disabled={!spotify.ready} className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition ${!spotify.playing || safetyReason ? 'bg-white/5 text-white/45 hover:bg-white/10 hover:text-white' : 'bg-white text-black hover:scale-105'} disabled:opacity-35`} title="Pausar Spotify" aria-label="Pausar Spotify"><Pause size={12} fill="currentColor" /></button>
+        <button type="button" onClick={() => runAction(spotify.previousTrack)} disabled={!spotify.ready || Boolean(safetyReason)} className="hidden h-5 w-5 shrink-0 items-center justify-center rounded-full text-white/55 transition hover:bg-white/10 hover:text-white disabled:opacity-25 sm:flex" title="Faixa anterior" aria-label="Faixa anterior"><SkipBack size={10} fill="currentColor" /></button>
+        <button type="button" onClick={togglePlayback} disabled={!spotify.ready || Boolean(safetyReason) || (!spotify.playing && !savedUrl)} className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full shadow-sm transition ${spotify.playing && !safetyReason ? 'bg-[#1DB954] text-white' : 'bg-white text-black hover:scale-105'} disabled:cursor-default disabled:opacity-45`} title={spotify.playing ? 'Pausar Spotify' : 'Reproduzir Spotify'} aria-label={spotify.playing ? 'Pausar Spotify' : 'Reproduzir Spotify'}>{spotify.playing ? <Pause size={10} fill="currentColor" /> : <Play size={10} fill="currentColor" className="translate-x-px" />}</button>
+        <button type="button" onClick={() => runAction(spotify.nextTrack)} disabled={!spotify.ready || Boolean(safetyReason)} className="hidden h-5 w-5 shrink-0 items-center justify-center rounded-full text-white/55 transition hover:bg-white/10 hover:text-white disabled:opacity-25 sm:flex" title="Próxima faixa" aria-label="Próxima faixa"><SkipForward size={10} fill="currentColor" /></button>
         <button type="button" onClick={() => setOpen((value) => !value)} className="flex h-6 w-4 shrink-0 items-center justify-center text-white/35 transition hover:text-white" title="Abrir controles do Spotify" aria-label="Abrir controles do Spotify"><ChevronDown size={11} className={`transition-transform ${open ? 'rotate-180' : ''}`} /></button>
       </div>
 
@@ -622,6 +683,54 @@ const SpotifyPremiumPlayer = ({ userId, profile }) => {
         </div>
 
         <SpotifyAccountSettings compact />
+
+        <div className="mt-2 overflow-hidden rounded-xl bg-[#171717] p-2.5 text-white shadow-inner" data-spotify-mini-browser>
+          <div className="flex gap-2.5">
+            <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-[#282828]">
+              {metadata.thumbnailUrl ? <img src={metadata.thumbnailUrl} alt="" className="h-full w-full object-cover" /> : <Music2 size={22} className="text-[#1DB954]" />}
+            </div>
+            <div className="min-w-0 flex-1 self-center">
+              <div className="truncate text-[11px] font-bold">{metadata.title || 'Spotify Premium'}</div>
+              <div className="mt-0.5 truncate text-[9px] text-white/50">{metadata.artist || status}</div>
+              <button type="button" onClick={seekPlayback} disabled={!spotify.ready || !playback.duration} className="mt-2 block w-full text-left disabled:cursor-default" title="Navegar pela faixa">
+                <span className="block h-1 overflow-hidden rounded-full bg-white/15"><span className="block h-full rounded-full bg-[#1DB954] transition-[width] duration-300" style={{ width: `${playbackPercent}%` }} /></span>
+                <span className="mt-1 flex justify-between text-[8px] tabular-nums text-white/40"><span>{formatPlaybackTime(playback.position)}</span><span>{formatPlaybackTime(playback.duration)}</span></span>
+              </button>
+            </div>
+          </div>
+          <div className="mt-1 flex items-center justify-center gap-4">
+            <button type="button" onClick={() => runAction(spotify.previousTrack)} disabled={!spotify.ready || Boolean(safetyReason)} className="flex h-7 w-7 items-center justify-center rounded-full text-white/65 transition hover:bg-white/10 hover:text-white disabled:opacity-25" title="Faixa anterior" aria-label="Faixa anterior"><SkipBack size={14} fill="currentColor" /></button>
+            <button type="button" onClick={togglePlayback} disabled={!spotify.ready || Boolean(safetyReason) || (!spotify.playing && !savedUrl)} className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-black transition hover:scale-105 disabled:opacity-40" title={spotify.playing ? 'Pausar' : 'Reproduzir'} aria-label={spotify.playing ? 'Pausar Spotify' : 'Reproduzir Spotify'}>{spotify.playing ? <Pause size={15} fill="currentColor" /> : <Play size={15} fill="currentColor" className="translate-x-px" />}</button>
+            <button type="button" onClick={() => runAction(spotify.nextTrack)} disabled={!spotify.ready || Boolean(safetyReason)} className="flex h-7 w-7 items-center justify-center rounded-full text-white/65 transition hover:bg-white/10 hover:text-white disabled:opacity-25" title="Próxima faixa" aria-label="Próxima faixa"><SkipForward size={14} fill="currentColor" /></button>
+          </div>
+          {spotify.trackWindow.next.length > 0 ? (
+            <div className="mt-1.5 border-t border-white/10 pt-1.5">
+              <div className="mb-1 text-[7px] font-bold uppercase tracking-[0.12em] text-white/30">A seguir</div>
+              {spotify.trackWindow.next.slice(0, 2).map((track) => (
+                <div key={track.uri || `${track.title}-${track.artist}`} className="flex items-center gap-1.5 py-0.5 text-[8px] text-white/45">
+                  <SkipForward size={8} className="shrink-0" />
+                  <span className="min-w-0 flex-1 truncate"><span className="font-semibold text-white/65">{track.title}</span>{track.artist ? ` · ${track.artist}` : ''}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {albumTracksLoading ? <div className="mt-1.5 border-t border-white/10 pt-1.5 text-[8px] text-white/35">Carregando faixas do álbum…</div> : null}
+          {albumTracks.length > 0 ? (
+            <div className="mt-1.5 max-h-24 overflow-y-auto border-t border-white/10 pt-1.5 [scrollbar-width:thin]">
+              <div className="sticky top-0 mb-1 bg-[#171717] pb-0.5 text-[7px] font-bold uppercase tracking-[0.12em] text-white/30">Faixas do álbum</div>
+              {albumTracks.map((track) => {
+                const active = track.uri === spotify.metadata.uri;
+                return (
+                  <button key={track.uri} type="button" onClick={() => runAction(() => spotify.playTrack(track.uri))} disabled={!spotify.ready || Boolean(safetyReason)} className={`flex w-full items-center gap-1.5 rounded-md px-1 py-1 text-left text-[8px] transition hover:bg-white/10 disabled:opacity-35 ${active ? 'bg-white/10 text-[#1DB954]' : 'text-white/50'}`} title={`Tocar ${track.title}`}>
+                    <span className="w-3 shrink-0 text-right tabular-nums text-white/25">{track.trackNumber || '•'}</span>
+                    <span className="min-w-0 flex-1 truncate"><span className={`font-semibold ${active ? 'text-[#1DB954]' : 'text-white/70'}`}>{track.title}</span>{track.artist ? ` · ${track.artist}` : ''}</span>
+                    {active ? <AudioLines size={9} className="shrink-0" /> : <Play size={8} className="shrink-0 opacity-0 transition group-hover:opacity-100" />}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
 
         <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 p-2.5 dark:border-slate-700 dark:bg-slate-800/60">
           <label className="flex items-center gap-2" aria-label="Volume do Spotify">
