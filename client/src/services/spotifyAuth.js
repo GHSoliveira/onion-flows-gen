@@ -91,7 +91,14 @@ const fetchProfile = async (accessToken) => {
   if (!response.ok) {
     const detail = String(profile?.error?.message || profile?.message || '').trim();
     if (response.status === 403) {
-      throw new Error(`spotify_profile_403_allowlist${detail ? `:${detail}` : ''}`);
+      return {
+        id: '',
+        name: 'Conta Spotify',
+        email: '',
+        product: '',
+        image: '',
+        accessWarning: `spotify_profile_403${detail ? `:${detail}` : ''}`,
+      };
     }
     throw new Error(`spotify_profile_${response.status}${detail ? `:${detail}` : ''}`);
   }
@@ -133,6 +140,7 @@ export const startSpotifyAuthorization = async (returnTo = '/agent') => {
     code_challenge: challenge,
     state,
     scope: SPOTIFY_SCOPES,
+    show_dialog: 'true',
   }).toString();
   window.location.assign(authorizeUrl.toString());
 };

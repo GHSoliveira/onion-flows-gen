@@ -35,6 +35,7 @@ const SpotifyAccountSettings = ({ compact = false }) => {
           <span className="min-w-0 flex-1">
             <span className="block text-[10px] font-bold text-slate-800 dark:text-slate-100">Spotify conectado</span>
             <span className="block truncate text-[9px] text-slate-500 dark:text-slate-400">{auth.profile?.name || 'Conta Spotify'}{auth.profile?.product ? ` · ${auth.profile.product}` : ''}</span>
+            {auth.profile?.accessWarning ? <span className="mt-0.5 block text-[8px] leading-3 text-amber-600 dark:text-amber-300">Perfil limitado; validando diretamente pelo player.</span> : null}
           </span>
           <button type="button" onClick={disconnectSpotify} className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/30" title="Desconectar Spotify" aria-label="Desconectar Spotify"><LogOut size={14} /></button>
         </div>

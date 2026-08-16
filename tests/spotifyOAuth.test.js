@@ -16,11 +16,14 @@ test('Spotify usa OAuth PKCE local sem Client Secret', () => {
   assert.match(auth, /transaction\.state !== returnedState/);
   assert.match(auth, /grant_type: 'refresh_token'/);
   assert.match(auth, /spotify_rate_limit_/);
-  assert.match(auth, /spotify_profile_403_allowlist/);
+  assert.match(auth, /accessWarning: `spotify_profile_403/);
+  assert.match(auth, /show_dialog: 'true'/);
   assert.doesNotMatch(auth, /client[_ ]?secret/i);
   const callback = read('client/src/pages/SpotifyCallback.jsx');
   assert.match(callback, /User Management/);
   assert.match(callback, /c9f477…cceab/);
+  const accountSettings = read('client/src/components/SpotifyAccountSettings.jsx');
+  assert.match(accountSettings, /validando diretamente pelo player/);
 });
 
 test('player Premium tem pausa, volume real e segurança por ligação', () => {
