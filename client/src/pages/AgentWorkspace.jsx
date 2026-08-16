@@ -882,6 +882,7 @@ const AgentWorkspace = () => {
   const ixcOsFileInputRef = useRef(null);
   const unreadByChatIdRef = useRef({});
   const knownChatIdsRef = useRef(new Set());
+  const pendingGenesysRenderAcksRef = useRef(new Map());
   const unreadBootstrappedRef = useRef(false);
   const lastReadCustomerAtRef = useRef({});
   const aiRequestRef = useRef(0);
@@ -1666,6 +1667,36 @@ const AgentWorkspace = () => {
   }, [myChats, waitingChats, activeCalls]);
 
   useEffect(() => {
+    if (!pendingGenesysRenderAcksRef.current.size) return undefined;
+    const visibleConversationIds = new Set(
+      [...myChats, ...waitingChats, ...activeCalls]
+        .flatMap((chat) => [chat?.genesysConvId, chat?.externalConvId])
+        .map((value) => String(value || ''))
+        .filter(Boolean)
+    );
+    const ready = [...pendingGenesysRenderAcksRef.current.values()]
+      .filter((item) => visibleConversationIds.has(item.conversationId));
+    if (!ready.length) return undefined;
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        for (const item of ready) {
+          if (!pendingGenesysRenderAcksRef.current.has(item.traceId)) continue;
+          pendingGenesysRenderAcksRef.current.delete(item.traceId);
+          socketService.reportGenesysSyncRendered({
+            conversationId: item.conversationId,
+            traceId: item.traceId
+          });
+        }
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+    };
+  }, [myChats, waitingChats, activeCalls]);
+
+  useEffect(() => {
     const handleResize = () => setIsMobileView(window.innerWidth < 1024);
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
@@ -1989,6 +2020,13 @@ const AgentWorkspace = () => {
 
     const handleAgentAssigned = (event) => {
       const chat = event?.chat;
+      const diagnostic = event?.syncDiagnostic;
+      if (diagnostic?.traceId && diagnostic?.conversationId) {
+        pendingGenesysRenderAcksRef.current.set(String(diagnostic.traceId), {
+          traceId: String(diagnostic.traceId),
+          conversationId: String(diagnostic.conversationId)
+        });
+      }
       if (chat?.id) {
         const membershipSignature = [
           String(chat.agentId || ''),

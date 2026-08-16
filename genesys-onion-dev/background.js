@@ -1,6 +1,6 @@
 importScripts("external-status.js", "lib/socket.io.min.js");
 
-const EXTENSION_BUILD = "2026.08.14.3";
+const EXTENSION_BUILD = "2026.08.16.1";
 const SETTINGS_KEY = "onionDevSettings";
 const AUTH_KEY = "onionDevAuth";
 const COMMUNICATIONS_KEY = "onionDevCommunications";
@@ -104,6 +104,7 @@ const outboundMediaConversationsInFlight = new Set();
 let activeOutboundMediaUploads = 0;
 const notificationTimers = new Map();
 const notificationSnapshots = new Map();
+const syncDiagnosticTargetByConversation = new Map();
 const passiveCallDisconnectTimers = new Map();
 const quarantinedNotificationIds = new Set();
 const manualReloadAt = new Map();
@@ -187,6 +188,42 @@ const genesysApiMetrics = {
   lastStatus: 0,
   peakCallsPerMinute: 0
 };
+
+function rememberSyncDiagnosticTarget(conversationId, sender = {}) {
+  if (!UUID_RE.test(String(conversationId || "")) || sender.tab?.id == null || sender.frameId == null) return;
+  syncDiagnosticTargetByConversation.set(String(conversationId), {
+    tabId: sender.tab.id,
+    frameId: sender.frameId,
+    at: Date.now()
+  });
+}
+
+function publishSyncDiagnosticStage(conversationId, stage, details = {}) {
+  const id = String(conversationId || "");
+  const target = syncDiagnosticTargetByConversation.get(id);
+  if (!UUID_RE.test(id) || !target || Date.now() - Number(target.at || 0) > 30 * 60 * 1000) return;
+  const event = {
+    at: Date.now(),
+    conversationId: id,
+    stage: String(stage || "").replace(/[^a-z0-9_-]/gi, "").slice(0, 60)
+  };
+  for (const key of ["expectedCount", "hydratedCount", "storedCount", "missingCount", "pendingCount", "attempt", "latencyMs"]) {
+    const value = Number(details[key]);
+    if (Number.isFinite(value) && value >= 0) event[key] = Math.floor(value);
+  }
+  for (const key of ["result", "reason", "source", "messageId", "traceId"]) {
+    const value = String(details[key] || "").replace(/[^a-z0-9_.:-]/gi, "").slice(0, 160);
+    if (value) event[key] = value;
+  }
+  for (const key of ["persisted", "volatile", "complete"]) {
+    if (typeof details[key] === "boolean") event[key] = details[key];
+  }
+  chrome.tabs.sendMessage(
+    target.tabId,
+    { type: "DEV_SYNC_DIAGNOSTIC_STAGE", event },
+    { frameId: target.frameId }
+  ).catch(() => {});
+}
 
 async function mapWithConcurrency(items, limit, worker) {
   const list = Array.isArray(items) ? items : [];
@@ -700,6 +737,11 @@ async function deliverReliableSnapshot(entry) {
     || !canDeliverActiveConversation(conversationId)
   ) return false;
   snapshotDeliveriesInFlight.add(entry.eventId);
+  publishSyncDiagnosticStage(conversationId, "snapshot_sent", {
+    expectedCount: entry.payload?.expectedMessageCount,
+    attempt: Number(entry.attempts || 0) + 1,
+    traceId: entry.eventId
+  });
   return new Promise((resolve, reject) => {
     const finish = (value) => {
       snapshotDeliveriesInFlight.delete(entry.eventId);
@@ -720,6 +762,13 @@ async function deliverReliableSnapshot(entry) {
         && expectedIds.join("|") === acceptedIds.join("|");
       if (validAck) {
         await removeSyncOutboxThroughSnapshot(entry).catch(() => {});
+        publishSyncDiagnosticStage(conversationId, "snapshot_ack", {
+          expectedCount: entry.payload?.expectedMessageCount,
+          storedCount: response.storedMessageCount,
+          complete: true,
+          traceId: entry.eventId,
+          latencyMs: Date.now() - Number(entry.createdAt || Date.now())
+        });
         log("ok", "Snapshot confirmado pelo Onion", `${entry.payload.convId.slice(0, 8)} · ${response.storedMessageCount}`);
         finish(true);
         return;
@@ -793,6 +842,12 @@ async function deliverReliableSnapshot(entry) {
         current.lastError = error?.message || response?.error || "ack_incompleto";
         current.nextAttemptAt = Date.now() + Math.min(30000, 1000 * (2 ** Math.min(current.attempts, 5)));
       }).catch(() => {});
+      publishSyncDiagnosticStage(conversationId, "snapshot_retry", {
+        expectedCount: entry.payload?.expectedMessageCount,
+        attempt: Number(entry.attempts || 0) + 1,
+        result: error ? "timeout" : "ack_incomplete",
+        traceId: entry.eventId
+      });
       log("warn", "Snapshot sem confirmação completa", error?.message || response?.error || "ACK divergente");
       finish(false);
       } catch (callbackError) {
@@ -839,6 +894,12 @@ async function queueReliableSnapshot(conversationId, messages, participantName, 
   const entryBytes = serializedByteLength(entry);
   if (options.volatileOnly === true || entryBytes > MAX_PERSISTED_SNAPSHOT_BYTES) {
     volatileSyncOutbox.set(eventId, entry);
+    publishSyncDiagnosticStage(conversationId, "snapshot_queued", {
+      expectedCount: cleanMessages.length,
+      volatile: true,
+      persisted: false,
+      traceId: eventId
+    });
     log(
       "info",
       "Snapshot grande mantido em memória",
@@ -847,10 +908,23 @@ async function queueReliableSnapshot(conversationId, messages, participantName, 
   } else {
     try {
       await mutateSyncOutbox((outbox) => { outbox[eventId] = entry; });
+      publishSyncDiagnosticStage(conversationId, "snapshot_queued", {
+        expectedCount: cleanMessages.length,
+        volatile: false,
+        persisted: true,
+        traceId: eventId
+      });
     } catch (error) {
       // A fila persistente melhora a recuperação após suspensão, mas não faz
       // parte do carregamento da conversa. Falha nela nunca bloqueia o Onion.
       volatileSyncOutbox.set(eventId, entry);
+      publishSyncDiagnosticStage(conversationId, "snapshot_queued", {
+        expectedCount: cleanMessages.length,
+        volatile: true,
+        persisted: false,
+        reason: "storage_unavailable",
+        traceId: eventId
+      });
       log("warn", "Snapshot mantido em memória", error?.message || "storage_indisponivel");
     }
   }
@@ -1040,6 +1114,11 @@ async function deliverReliableDelta(entry) {
     || !canDeliverActiveConversation(conversationId)
   ) return false;
   deltaDeliveriesInFlight.add(entry.eventId);
+  publishSyncDiagnosticStage(conversationId, "delta_sent", {
+    attempt: Number(entry.attempts || 0) + 1,
+    messageId: entry.payload?.mensagem?.id,
+    traceId: entry.eventId
+  });
   return new Promise((resolve) => {
     let settled = false;
     const finish = (value) => {
@@ -1058,6 +1137,12 @@ async function deliverReliableDelta(entry) {
             const messageId = String(entry.payload?.mensagem?.id || "");
             state?.passivePendingMessageIds?.delete(messageId);
             if (!terminal && state && messageId) state.messageIds.add(messageId);
+            publishSyncDiagnosticStage(conversationId, terminal ? "delta_terminal" : "delta_ack", {
+              messageId,
+              result: terminal ? "conversation_closed" : "stored",
+              traceId: entry.eventId,
+              latencyMs: Date.now() - Number(entry.createdAt || Date.now())
+            });
             finish(true);
             return;
           }
@@ -1068,6 +1153,12 @@ async function deliverReliableDelta(entry) {
             current.lastError = error?.message || response?.error || "ack_incompleto";
             current.nextAttemptAt = Date.now() + Math.min(30000, 1000 * (2 ** Math.min(current.attempts, 5)));
           }).catch(() => {});
+          publishSyncDiagnosticStage(conversationId, "delta_retry", {
+            attempt: Number(entry.attempts || 0) + 1,
+            messageId: entry.payload?.mensagem?.id,
+            result: error ? "timeout" : "ack_incomplete",
+            traceId: entry.eventId
+          });
           finish(false);
         } catch (callbackError) {
           log("error", "Falha ao confirmar delta Onion", callbackError?.message || "erro");
@@ -1099,6 +1190,11 @@ async function queueReliableDelta(payload = {}) {
   };
   await mutateDeltaOutbox((outbox) => {
     if (!outbox[eventId]) outbox[eventId] = entry;
+  });
+  publishSyncDiagnosticStage(conversationId, "delta_queued", {
+    persisted: true,
+    messageId,
+    traceId: eventId
   });
   return deliverReliableDelta(entry);
 }
@@ -2513,21 +2609,35 @@ function deliverPassiveMessageToOnion(payload) {
   });
 }
 function deliverConversationUpsertToOnion(payload, failureLabel = "Upsert sem confirmação") {
-  if (!socket?.connected || !rateAllowed()) return Promise.resolve(false);
+  const conversationId = String(payload?.convId || payload?.conversationId || "");
+  if (!socket?.connected || !rateAllowed()) {
+    publishSyncDiagnosticStage(conversationId, "upsert_deferred", {
+      reason: socket?.connected ? "rate_limit" : "socket_disconnected"
+    });
+    return Promise.resolve(false);
+  }
+  publishSyncDiagnosticStage(conversationId, "upsert_sent", {
+    source: payload?.source || "unknown"
+  });
   return new Promise((resolve) => {
     socket.timeout(ACK_TIMEOUT_MS).emit("ext:atendimento:upsert", payload, (error, response) => {
       if (error || response?.ok === false) {
+        publishSyncDiagnosticStage(conversationId, "upsert_retry", {
+          result: error ? "timeout" : "rejected"
+        });
         log("warn", failureLabel, error?.message || response?.error || "ack_incompleto");
         resolve(false);
         return;
       }
-      const conversationId = String(payload?.convId || payload?.conversationId || "");
       if (UUID_RE.test(conversationId)) {
         const state = conversationState(conversationId);
         state.upserted = true;
         state.closed = false;
         state.lifecycle = "ACTIVE";
       }
+      publishSyncDiagnosticStage(conversationId, "upsert_ack", {
+        result: response?.created ? "created" : "updated"
+      });
       log("ok", "Upsert confirmado pelo Onion", response?.chatId || conversationId.slice(0, 8));
       resolve(true);
     });
@@ -4037,9 +4147,13 @@ async function syncConversationFromNotification(conversationId) {
   const state = conversationState(conversationId);
   if (state.syncing) {
     state.rerun = true;
+    publishSyncDiagnosticStage(conversationId, "sync_rerun_requested");
     return;
   }
   state.syncing = true;
+  publishSyncDiagnosticStage(conversationId, "sync_started", {
+    pendingCount: pendingConversationSyncs.size
+  });
   try {
     const [cfg, credentials] = await Promise.all([settings(), auth()]);
     if (!cfg.enabled || !credentials?.token) return;
@@ -4115,6 +4229,9 @@ async function syncConversationFromNotification(conversationId) {
       }
     }
     if (!identity || !refs) {
+      publishSyncDiagnosticStage(conversationId, "sync_discarded", {
+        reason: "agent_inactive_or_identity_missing"
+      });
       state.observedAgentActive = false;
       state.observedInactiveAt = Date.now();
       if (!state.upserted) state.lifecycle = "DISCOVERED";
@@ -4270,6 +4387,10 @@ async function syncConversationFromNotification(conversationId) {
       return;
     }
 
+    publishSyncDiagnosticStage(conversationId, "hydration_started", {
+      expectedCount: selectedIds.length,
+      source: useNotificationSnapshot ? "websocket" : "api"
+    });
     const entities = [];
     for (let offset = 0; offset < selectedIds.length; offset += 80) {
       const chunk = selectedIds.slice(offset, offset + 80);
@@ -4315,6 +4436,12 @@ async function syncConversationFromNotification(conversationId) {
       state.passiveMediaPendingAt.delete(id);
     });
     const missingIds = selectedIds.filter((id) => !returnedIds.has(id));
+    publishSyncDiagnosticStage(conversationId, "hydration_complete", {
+      expectedCount: selectedIds.length,
+      hydratedCount: messages.length,
+      missingCount: missingIds.length,
+      complete: missingIds.length === 0
+    });
     if (failedMediaIds.size) {
       log(
         "warn",
@@ -4360,6 +4487,9 @@ async function syncConversationFromNotification(conversationId) {
       `${conversationId.slice(0, 8)} · ${messages.length} novas`
     );
   } catch (error) {
+    publishSyncDiagnosticStage(conversationId, "sync_failed", {
+      reason: "pipeline_error"
+    });
     log("error", "Falha na notification Genesys", `${conversationId.slice(0, 8)} · ${error.message}`);
   } finally {
     state.syncing = false;
@@ -4399,6 +4529,10 @@ function scheduleNotificationSync(conversationId, delayMs = NOTIFICATION_DEBOUNC
   }
   quarantinedNotificationIds.delete(conversationId);
   clearTimeout(notificationTimers.get(conversationId));
+  publishSyncDiagnosticStage(conversationId, "sync_queued", {
+    latencyMs: Math.max(NOTIFICATION_DEBOUNCE_MS, Number(delayMs) || 0),
+    pendingCount: pendingConversationSyncs.size
+  });
   notificationTimers.set(conversationId, setTimeout(() => {
     notificationTimers.delete(conversationId);
     pendingConversationSyncs.add(conversationId);
@@ -5185,6 +5319,16 @@ async function ensureSocket() {
     });
     next.on("disconnect", (reason) => log("warn", "Socket desconectado", reason));
     next.on("connect_error", (error) => log("error", "Erro de conexão", error.message));
+    next.on("ext:diagnostic:rendered", (payload = {}) => {
+      const conversationId = String(payload.conversationId || payload.convId || "");
+      if (!UUID_RE.test(conversationId)) return;
+      publishSyncDiagnosticStage(conversationId, "panel_rendered", {
+        traceId: payload.traceId,
+        latencyMs: payload.latencyMs,
+        source: payload.stage,
+        result: "rendered"
+      });
+    });
     next.on("cmd:enviar_mensagem", (payload = {}, ack) => {
       forwardMessageThroughGenesysWebRequest(next, payload, ack).catch((error) => {
         commandResult(next, payload, { ok: false, error: error?.message || "falha_inesperada" }, "enviar_mensagem", ack);
@@ -5482,6 +5626,7 @@ async function cleanupClosedConversationState() {
     observationDivergenceLogAt.delete(conversationId);
     inactiveNotificationLogAt.delete(conversationId);
     notificationSnapshots.delete(conversationId);
+    syncDiagnosticTargetByConversation.delete(conversationId);
     clearTimeout(notificationTimers.get(conversationId));
     notificationTimers.delete(conversationId);
     clearTimeout(passiveCallDisconnectTimers.get(conversationId));
@@ -5632,6 +5777,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ ok: false, error: "observacao_de_rede_invalida" });
       return;
     }
+    for (const item of Array.isArray(message.conversations) ? message.conversations : []) {
+      rememberSyncDiagnosticTarget(item?.conversationId, sender);
+    }
     observeConversationNetwork(message);
     Promise.all([
       processPassiveCallStates(message),
@@ -5666,6 +5814,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ ok: false, error: "notification_origem_invalida" });
       return;
     }
+    rememberSyncDiagnosticTarget(conversationId, sender);
     let snapshot = null;
     if (message.conversation && Number(message.schemaVersion || 0) >= 2) {
       snapshot = rememberNotificationSnapshot(message.conversation, message.observedAt);
@@ -5674,6 +5823,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
     }
+    publishSyncDiagnosticStage(conversationId, "notification_received", {
+      expectedCount: snapshot?.messageRefs?.length || 0,
+      source: snapshot ? "websocket_snapshot" : "notification_id"
+    });
     if (
       snapshot?.genesysMediaType === "voice"
       || conversations.get(conversationId)?.callUpserted

@@ -293,3 +293,19 @@ test('watcher reconcilia espelho Genesys calado sem forçar re-seed nem insistir
   // Ligado no tick, depois de revalidar que o chat não fechou.
   assert.match(watcher, /await handleGenesysMirrorReconcile\(afterInactivityChat\)/);
 });
+
+test('painel confirma renderização ao diagnóstico sem participar do ACK de entrega', async () => {
+  const relay = await loadRelaySource();
+  const workspace = await loadAgentWorkspaceSource();
+  const socket = await readFile(new URL('../client/src/services/socket.js', import.meta.url), 'utf8');
+  assert.match(relay, /const pendingPanelRenderAcks = new Map\(\)/);
+  assert.match(relay, /syncDiagnostic = \{ conversationId: convId, traceId, stage: 'upsert', sentAt: Date\.now\(\) \}/);
+  assert.match(relay, /stage: 'backfill'/);
+  assert.match(relay, /socket\.on\('genesys:sync_rendered'/);
+  assert.match(relay, /emit\('ext:diagnostic:rendered'/);
+  assert.match(workspace, /pendingGenesysRenderAcksRef/);
+  assert.match(workspace, /requestAnimationFrame/);
+  assert.match(workspace, /reportGenesysSyncRendered/);
+  assert.match(socket, /this\.socket\.emit\('genesys:sync_rendered', payload\)/);
+  assert.doesNotMatch(relay, /pendingPanelRenderAcks[\s\S]{0,300}acceptedMessageIds/);
+});

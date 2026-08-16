@@ -1,4 +1,4 @@
-const TOOL_VERSION = "0.2.0";
+const TOOL_VERSION = "0.3.0";
 const STORAGE_PREFIX = "onionCallDiagnostic:";
 const MAX_EVENTS = 4000;
 const MAX_CAPTURE_BYTES = 4 * 1024 * 1024;
@@ -287,6 +287,29 @@ function sanitizeProbeEvent(raw = {}, sender = {}) {
         .filter((item) => item.id)
     };
   }
+  if (kind === "onion_pipeline") {
+    const boundedCount = (value) => Math.max(0, Math.min(100000, Number(value) || 0));
+    return {
+      ...base,
+      conversationId: cleanId(raw.conversationId),
+      stage: cleanText(raw.stage, 60).replace(/[^a-zA-Z0-9_-]/g, ""),
+      expectedCount: boundedCount(raw.expectedCount),
+      hydratedCount: boundedCount(raw.hydratedCount),
+      storedCount: boundedCount(raw.storedCount),
+      missingCount: boundedCount(raw.missingCount),
+      pendingCount: boundedCount(raw.pendingCount),
+      attempt: boundedCount(raw.attempt),
+      latencyMs: Math.max(0, Math.min(30 * 60 * 1000, Number(raw.latencyMs) || 0)),
+      result: cleanText(raw.result, 80).replace(/[^a-zA-Z0-9_.:-]/g, ""),
+      reason: cleanText(raw.reason, 80).replace(/[^a-zA-Z0-9_.:-]/g, ""),
+      source: cleanText(raw.source, 80).replace(/[^a-zA-Z0-9_.:-]/g, ""),
+      messageId: cleanTechnicalId(raw.messageId),
+      traceId: cleanTechnicalId(raw.traceId),
+      persisted: raw.persisted === true,
+      volatile: raw.volatile === true,
+      complete: raw.complete === true
+    };
+  }
   return null;
 }
 
@@ -327,7 +350,10 @@ function eventDedupKey(event) {
     event.routeKind,
     event.route,
     event.observerEvent,
+    event.stage,
     event.conversationId,
+    event.messageId,
+    event.traceId,
     event.endpointKind
   ].map((value) => String(value ?? "")).join("|");
 }
@@ -409,7 +435,7 @@ async function setFramesActive(tabId, active, phase = "change") {
 async function startCapture(tabId, tabUrl) {
   const now = Date.now();
   const capture = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     tool: "Onion Sync Diagnostic",
     toolVersion: TOOL_VERSION,
     privacy: "Sem tokens, cookies, mensagens, CPF, nomes, telefones ou enderecos.",
@@ -461,6 +487,7 @@ function buildSummary(capture) {
   const messageTransitions = [];
   const messageBatchTimeline = [];
   const observerTimeline = [];
+  const pipelineTimeline = [];
   const transportTimeline = [];
   const rosterTimeline = [];
   const conversationDiagnostics = new Map();
@@ -609,6 +636,36 @@ function buildSummary(capture) {
         });
       }
     }
+    if (event.kind === "onion_pipeline") {
+      if (event.conversationId) conversationIds.add(event.conversationId);
+      const diagnostic = touchConversation(
+        event.conversationId,
+        `pipeline_${event.stage || "unknown"}`,
+        event.at
+      );
+      if (event.messageId) diagnostic?.messageIds.add(event.messageId);
+      pipelineTimeline.push({
+        at: event.at,
+        offsetMs: event.offsetMs,
+        conversationId: event.conversationId,
+        stage: event.stage,
+        expectedCount: event.expectedCount,
+        hydratedCount: event.hydratedCount,
+        storedCount: event.storedCount,
+        missingCount: event.missingCount,
+        pendingCount: event.pendingCount,
+        attempt: event.attempt,
+        latencyMs: event.latencyMs,
+        result: event.result,
+        reason: event.reason,
+        source: event.source,
+        messageId: event.messageId,
+        traceId: event.traceId,
+        persisted: event.persisted,
+        volatile: event.volatile,
+        complete: event.complete
+      });
+    }
     if (event.kind === "transport_state") {
       transportTimeline.push({
         at: event.at,
@@ -685,6 +742,7 @@ function buildSummary(capture) {
     rosterTimeline,
     transportTimeline,
     observerTimeline,
+    pipelineTimeline,
     conversationDiagnostics: diagnostics,
     callTransitions,
     messageTransitions,

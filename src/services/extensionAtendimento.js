@@ -21,6 +21,8 @@ const onlyDigits = (value) => String(value || '').replace(/\D/g, '');
 const GENESYS_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const extensionErrorDedupe = new Map();
 const EXTENSION_ERROR_DEDUPE_MS = 60000;
+const pendingPanelRenderAcks = new Map();
+const PANEL_RENDER_ACK_TTL_MS = 30000;
 
 const pickString = (...values) => {
   for (const value of values) {
@@ -629,11 +631,24 @@ const handleExtUpsertUnlocked = async (socket, payload = {}) => {
   const light = identityOnly || ixcOnlyUpsert;
   const hydrated = light ? null : await hydrateChatWithMessages(chat, { limit: 500 });
   const pub = publicChat(hydrated || chat);
+  const traceId = generateId('gxsync');
+  const syncDiagnostic = { conversationId: convId, traceId, stage: 'upsert', sentAt: Date.now() };
+  pendingPanelRenderAcks.set(traceId, {
+    conversationId: convId,
+    userId: agentId,
+    stage: syncDiagnostic.stage,
+    sentAt: syncDiagnostic.sentAt
+  });
+  for (const [id, pending] of pendingPanelRenderAcks) {
+    if (Date.now() - Number(pending.sentAt || 0) > PANEL_RENDER_ACK_TTL_MS) {
+      pendingPanelRenderAcks.delete(id);
+    }
+  }
 
-  emitToAgentPanel(chat, 'agent_assigned', { chat: pub });
-  emitToAgentPanel(chat, 'chat_updated', { chat: pub });
+  emitToAgentPanel(chat, 'agent_assigned', { chat: pub, syncDiagnostic });
+  emitToAgentPanel(chat, 'chat_updated', { chat: pub, syncDiagnostic });
   if (created) {
-    emitToAgentPanel(chat, 'new_chat', { chat: pub });
+    emitToAgentPanel(chat, 'new_chat', { chat: pub, syncDiagnostic });
   }
 
   return {
@@ -867,7 +882,23 @@ export const handleExtBackfill = async (socket, payload = {}) => {
   }
 
   const hydrated = await hydrateChatWithMessages(liveChat, { limit: 500 });
-  emitToAgentPanel(liveChat, 'agent_assigned', { chat: publicChat(hydrated || liveChat) });
+  const renderTraceId = generateId('gxsync');
+  const syncDiagnostic = {
+    conversationId: convId,
+    traceId: renderTraceId,
+    stage: 'backfill',
+    sentAt: Date.now()
+  };
+  pendingPanelRenderAcks.set(renderTraceId, {
+    conversationId: convId,
+    userId: agentId,
+    stage: syncDiagnostic.stage,
+    sentAt: syncDiagnostic.sentAt
+  });
+  emitToAgentPanel(liveChat, 'agent_assigned', {
+    chat: publicChat(hydrated || liveChat),
+    syncDiagnostic
+  });
 
   return {
     ok: true,
@@ -2190,6 +2221,27 @@ export const registerExtensionAtendimentoHandlers = (socket) => {
   socket.on('ext:atendimento:cliente', wrap(handleExtCliente, 'cliente'));
   socket.on('ext:atendimento:encerrar', wrap(handleExtEncerrar, 'encerrar'));
   socket.on('ext:atendimento:ligacao', wrap(handleExtLigacao, 'ligacao'));
+
+  socket.on('genesys:sync_rendered', (payload = {}) => {
+    if (!socket.userId || socket.isGenesysExtension) return;
+    const traceId = pickString(payload.traceId);
+    const conversationId = pickString(payload.conversationId, payload.convId);
+    const pending = pendingPanelRenderAcks.get(traceId);
+    if (
+      !pending
+      || pending.userId !== socket.userId
+      || pending.conversationId !== conversationId
+      || !GENESYS_UUID_RE.test(conversationId)
+      || Date.now() - Number(pending.sentAt || 0) > PANEL_RENDER_ACK_TTL_MS
+    ) return;
+    pendingPanelRenderAcks.delete(traceId);
+    getIo()?.to(extensionRoomForAgent(socket.userId)).emit('ext:diagnostic:rendered', {
+      conversationId,
+      traceId,
+      stage: pending.stage || 'unknown',
+      latencyMs: Math.max(0, Date.now() - Number(pending.sentAt || Date.now()))
+    });
+  });
 
   socket.on('ext:log:error', (payload = {}) => {
     if (!socket.userId || !isExtensionSocket(socket)) return;

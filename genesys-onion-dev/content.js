@@ -303,6 +303,7 @@
       customerOlt: String(item?.customerOlt || "").replace(/\s+/g, " ").trim().slice(0, 200),
       customerPon: String(item?.customerPon || "").trim().slice(0, 100),
       customerBranch: String(item?.customerBranch || "").trim().slice(0, 80),
+      assignedAt: item?.assignedAt || null,
       openedAt: item?.openedAt || null,
       inactivityTimeout: item?.inactivityTimeout || null,
       genesysMediaType: String(item?.genesysMediaType || "").toLowerCase() === "voice" ? "voice" : "",
@@ -375,6 +376,14 @@
     scheduleScan();
   });
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type === "DEV_SYNC_DIAGNOSTIC_STAGE" && message.event) {
+      window.postMessage({
+        source: "onion-dev-sync-stage",
+        event: message.event
+      }, "*");
+      sendResponse({ ok: true });
+      return;
+    }
     if (message?.type === "DEV_NETWORK_OBSERVATION_CONFIG") {
       window.postMessage({
         source: "onion-dev-observation-config",

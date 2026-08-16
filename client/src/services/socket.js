@@ -142,6 +142,12 @@ class SocketService {
     this.socket.emit('heartbeat');
   }
 
+  reportGenesysSyncRendered(payload) {
+    if (!this.socket?.connected) return false;
+    this.socket.emit('genesys:sync_rendered', payload);
+    return true;
+  }
+
   requestAcknowledgement(event, payload, timeoutMs = 30000) {
     if (!this.socket?.connected) {
       return Promise.reject(new Error('Socket local desconectado'));

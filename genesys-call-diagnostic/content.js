@@ -206,6 +206,31 @@
   window.addEventListener("message", (message) => {
     if (!active || message.source !== window) return;
     const data = message.data || {};
+    if (data.source === "onion-dev-sync-stage") {
+      const event = data.event || {};
+      emitDiagnosticEvent({
+        at: Number(event.at || Date.now()),
+        kind: "onion_pipeline",
+        conversationId: cleanId(event.conversationId),
+        stage: safeReason(event.stage),
+        expectedCount: Number(event.expectedCount || 0),
+        hydratedCount: Number(event.hydratedCount || 0),
+        storedCount: Number(event.storedCount || 0),
+        missingCount: Number(event.missingCount || 0),
+        pendingCount: Number(event.pendingCount || 0),
+        attempt: Number(event.attempt || 0),
+        latencyMs: Number(event.latencyMs || 0),
+        result: safeReason(event.result),
+        reason: safeReason(event.reason),
+        source: safeReason(event.source),
+        messageId: cleanTechnicalId(event.messageId),
+        traceId: safeReason(event.traceId),
+        persisted: event.persisted === true,
+        volatile: event.volatile === true,
+        complete: event.complete === true
+      });
+      return;
+    }
     if (data.source === "onion-call-diagnostic-probe") {
       const event = data.event;
       if (!event || typeof event !== "object") return;

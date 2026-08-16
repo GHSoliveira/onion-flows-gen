@@ -13,7 +13,7 @@ async function source(name) {
 test('extensao de diagnostico e independente e nao ganha acesso a segredos', async () => {
   const manifest = JSON.parse(await source('manifest.json'));
   assert.equal(manifest.name, 'Onion Sync Diagnostic');
-  assert.equal(manifest.version, '0.2.1');
+  assert.equal(manifest.version, '0.3.0');
   assert.deepEqual(manifest.permissions.sort(), ['storage', 'tabs']);
   assert.deepEqual(manifest.host_permissions, ['https://apps.sae1.pure.cloud/*']);
   for (const forbidden of ['cookies', 'debugger', 'downloads', 'webRequest', 'webRequestBlocking']) {
@@ -57,6 +57,8 @@ test('relatorio e limitado, sanitizado e sobrevive a suspensao do service worker
   assert.match(background, /callTransitions/);
   assert.match(background, /messageTransitions/);
   assert.match(background, /messageBatchTimeline/);
+  assert.match(background, /pipelineTimeline/);
+  assert.match(background, /kind === "onion_pipeline"/);
   assert.match(background, /conversationDiagnostics/);
   assert.match(background, /rawToObserverMs/);
   assert.match(background, /EVENT_HEARTBEAT_MS = 5000/);
@@ -76,6 +78,8 @@ test('captura usa dois cliques e baixa JSON local', async () => {
   assert.match(content, /MutationObserver/);
   assert.match(content, /onion-dev-network-observation/);
   assert.match(content, /observerEvent: "communication_candidate"/);
+  assert.match(content, /source === "onion-dev-sync-stage"/);
+  assert.match(content, /kind: "onion_pipeline"/);
   assert.match(content, /mediaHint/);
   assert.doesNotMatch(content, /innerText|textContent/);
 });

@@ -216,3 +216,21 @@ test("observador passivo ignora ids de tabulacao e endpoints de acao", async () 
   assert.match(focus, /!isObservableConversationDataPath\(path\)/);
   assert.doesNotMatch(focus, /if \(\/\\\/participants\\\//);
 });
+
+test("pipeline de chegada expõe telemetria passiva sem alterar a entrega confiável", async () => {
+  const background = await loadBackground();
+  const content = await readFile(path.join(extensionRoot, "content.js"), "utf8");
+  assert.match(content, /assignedAt: item\?\.assignedAt \|\| null/);
+  assert.match(content, /DEV_SYNC_DIAGNOSTIC_STAGE/);
+  assert.match(content, /source: "onion-dev-sync-stage"/);
+  assert.match(background, /function publishSyncDiagnosticStage\(conversationId, stage, details = \{\}\)/);
+  for (const stage of [
+    "notification_received", "sync_queued", "sync_started", "upsert_sent", "upsert_ack",
+    "hydration_started", "hydration_complete", "snapshot_queued", "snapshot_sent", "snapshot_ack",
+    "delta_queued", "delta_sent", "delta_ack", "panel_rendered"
+  ]) {
+    assert.match(background, new RegExp(`"${stage}"`));
+  }
+  assert.match(background, /removeSyncOutboxThroughSnapshot\(entry\)/);
+  assert.match(background, /removeDeltaOutboxEvent\(entry\.eventId\)/);
+});
