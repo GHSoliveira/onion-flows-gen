@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { AudioLines, ChevronDown, ChevronLeft, ChevronRight, Disc3, ExternalLink, Library, Loader2, Music2, Pause, Play, RotateCcw, Save, SkipBack, SkipForward, Trash2, Volume2, VolumeX } from 'lucide-react';
+import { AudioLines, ChevronDown, ChevronLeft, ChevronRight, Disc3, ExternalLink, Library, Loader2, Music2, Pause, Play, Save, SkipBack, SkipForward, Trash2, Volume2, VolumeX } from 'lucide-react';
 import {
   getPlaybackSafetySnapshot,
   subscribePlaybackSafety,
@@ -15,6 +15,13 @@ const SPOTIFY_BRIDGE_EVENT = 'onion:spotify:bridge:event';
 const spotifyMetadataCache = new Map();
 const spotifyAlbumTracksCache = new Map();
 const SAVED_ALBUMS_PAGE_SIZE = 12;
+
+const SpotifyGlyph = ({ size = 17, className = '' }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true" className={className}>
+    <circle cx="12" cy="12" r="9.25" stroke="currentColor" strokeWidth="1.5" />
+    <path d="M6.6 9.2c3.9-1.15 7.85-.8 11.25 1.05M7.35 12.25c3.25-.85 6.65-.5 9.45 1M8.05 15.1c2.55-.6 5.15-.3 7.35.85" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" />
+  </svg>
+);
 
 const formatPlaybackTime = (milliseconds) => {
   const seconds = Math.max(0, Math.floor((Number(milliseconds) || 0) / 1000));
@@ -165,9 +172,6 @@ const SpotifyPreviewPlayer = ({ userId }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [hostKey, setHostKey] = useState(0);
-  const [currentEntityUrl, setCurrentEntityUrl] = useState(() => readSavedUrl(userId));
-  const [metadata, setMetadata] = useState({ title: 'Spotify', thumbnailUrl: '' });
-  const [playback, setPlayback] = useState({ duration: 0, position: 0 });
 
   const safetyReason = useMemo(() => {
     if (safety.activeCallCount > 0) return 'ligação em andamento';
@@ -178,25 +182,6 @@ const SpotifyPreviewPlayer = ({ userId }) => {
   useEffect(() => {
     playingRef.current = playing;
   }, [playing]);
-
-  useEffect(() => {
-    const targetUrl = normalizeSpotifyContentUrl(currentEntityUrl || savedUrl);
-    if (!targetUrl) {
-      setMetadata({ title: 'Spotify', thumbnailUrl: '' });
-      return undefined;
-    }
-    const controller = new AbortController();
-    loadSpotifyMetadata(targetUrl, controller.signal)
-      .then((nextMetadata) => {
-        if (nextMetadata) setMetadata(nextMetadata);
-      })
-      .catch((fetchError) => {
-        if (fetchError?.name !== 'AbortError') {
-          setMetadata((current) => ({ ...current, title: current.title || 'Spotify' }));
-        }
-      });
-    return () => controller.abort();
-  }, [currentEntityUrl, savedUrl]);
 
   useEffect(() => {
     const closeOnOutsideClick = (event) => {
@@ -220,18 +205,10 @@ const SpotifyPreviewPlayer = ({ userId }) => {
         return;
       }
       if (eventName === 'playback-started') {
-        const playingUrl = normalizeSpotifyContentUrl(data?.playingURI || '');
-        if (playingUrl) setCurrentEntityUrl(playingUrl);
         setPlaying(true);
         return;
       }
       if (eventName === 'playback-update') {
-        const playingUrl = normalizeSpotifyContentUrl(data?.playingURI || '');
-        if (playingUrl) setCurrentEntityUrl((current) => current === playingUrl ? current : playingUrl);
-        setPlayback({
-          duration: Math.max(0, Number(data?.duration) || 0),
-          position: Math.max(0, Number(data?.position) || 0),
-        });
         setPlaying(data?.isPaused === false);
         return;
       }
@@ -298,8 +275,6 @@ const SpotifyPreviewPlayer = ({ userId }) => {
     setError('');
     setDraftUrl(normalized);
     setSavedUrl(normalized);
-    setCurrentEntityUrl(normalized);
-    setPlayback({ duration: 0, position: 0 });
   };
 
   const clearContent = () => {
@@ -307,45 +282,12 @@ const SpotifyPreviewPlayer = ({ userId }) => {
     try { localStorage.removeItem(spotifyStorageKey(userId)); } catch {}
     setSavedUrl('');
     setDraftUrl('');
-    setCurrentEntityUrl('');
-    setMetadata({ title: 'Spotify', thumbnailUrl: '' });
-    setPlayback({ duration: 0, position: 0 });
     setReady(false);
     setPlaying(false);
     setError('');
     setBridgeLoaded(false);
     setHostKey((value) => value + 1);
     pausedBySafetyRef.current = false;
-  };
-
-  const playPlayback = () => {
-    if (!ready || safetyReason) return;
-    sendBridgeCommand('resume');
-    pausedBySafetyRef.current = false;
-    playingRef.current = true;
-    setPlaying(true);
-  };
-
-  const pausePlayback = () => {
-    if (!ready) return;
-    sendBridgeCommand('pause');
-    pausedBySafetyRef.current = false;
-    playingRef.current = false;
-    setPlaying(false);
-  };
-
-  const restartPlayback = () => {
-    if (!ready || safetyReason) return;
-    sendBridgeCommand('restart');
-    pausedBySafetyRef.current = false;
-    setPlaying(true);
-  };
-
-  const seekPlayback = (event) => {
-    if (!ready || !playback.duration) return;
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const ratio = Math.min(1, Math.max(0, (event.clientX - bounds.left) / Math.max(1, bounds.width)));
-    sendBridgeCommand('seek', (playback.duration * ratio) / 1000);
   };
 
   const status = safetyReason
@@ -359,125 +301,21 @@ const SpotifyPreviewPlayer = ({ userId }) => {
           : savedUrl
             ? 'Música de fundo'
             : 'Configurar música';
-  const playbackPercent = playback.duration > 0
-    ? Math.min(100, Math.max(0, (playback.position / playback.duration) * 100))
-    : 0;
-
   return (
     <div ref={rootRef} className="relative" data-spotify-global-player>
-      <div className={`flex h-10 max-w-[calc(100vw-112px)] items-center gap-1.5 rounded-xl border px-1.5 text-white shadow-sm transition-colors sm:w-60 xl:w-80 ${
-        safetyReason ? 'border-amber-400/50 bg-[#241f15]' : 'border-white/10 bg-[#171717]'
-      }`}>
-        <button
-          type="button"
-          onClick={() => setOpen((value) => !value)}
-          className="relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-[#282828]"
-          title="Abrir o player do Spotify"
-          aria-expanded={open}
-        >
-          {metadata.thumbnailUrl ? (
-            <img src={metadata.thumbnailUrl} alt="" className="h-full w-full object-cover" />
-          ) : (
-            <Music2 size={16} className="text-[#1DB954]" />
-          )}
-        </button>
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className={`relative flex h-8 w-8 items-center justify-center rounded-full transition-colors ${open ? 'bg-[#1DB954]/12 text-[#159447] dark:bg-[#1DB954]/15 dark:text-[#1DB954]' : 'text-slate-500 hover:bg-gray-100 hover:text-[#159447] dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-[#1DB954]'}`}
+        title="Abrir Spotify"
+        aria-label="Abrir Spotify"
+        aria-expanded={open}
+      >
+        <SpotifyGlyph />
+        {playing ? <span className="absolute bottom-0.5 right-0.5 h-1.5 w-1.5 rounded-full bg-[#1DB954] ring-2 ring-white dark:ring-slate-800" /> : null}
+      </button>
 
-        <button
-          type="button"
-          onClick={() => setOpen((value) => !value)}
-          className="hidden min-w-0 flex-1 text-left sm:block"
-          title={`${metadata.title} · ${status}`}
-          aria-expanded={open}
-        >
-          <span className="block truncate text-[9px] font-bold leading-tight text-white">{savedUrl ? metadata.title : 'Conectar Spotify'}</span>
-          <span className={`mt-0.5 block truncate text-[8px] leading-tight ${safetyReason ? 'text-amber-300' : 'text-white/45'}`}>{status}</span>
-          <span
-            role="progressbar"
-            aria-label="Progresso da música"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={Math.round(playbackPercent)}
-            className="mt-1 block h-0.5 overflow-hidden rounded-full bg-white/15 xl:hidden"
-          >
-            <span className="block h-full rounded-full bg-[#1DB954] transition-[width] duration-300" style={{ width: `${playbackPercent}%` }} />
-          </span>
-        </button>
-
-        {savedUrl && playback.duration > 0 ? (
-          <button
-            type="button"
-            onClick={seekPlayback}
-            className="hidden w-16 shrink-0 text-left xl:block"
-            title="Clique para avançar ou voltar na música"
-          >
-            <span className="flex justify-between text-[7px] tabular-nums text-white/40">
-              <span>{formatPlaybackTime(playback.position)}</span>
-              <span>-{formatPlaybackTime(Math.max(0, playback.duration - playback.position))}</span>
-            </span>
-            <span className="mt-1 block h-0.5 overflow-hidden rounded-full bg-white/15">
-              <span className="block h-full rounded-full bg-white/80" style={{ width: `${playbackPercent}%` }} />
-            </span>
-          </button>
-        ) : null}
-
-        {savedUrl ? (
-          <button
-            type="button"
-            onClick={restartPlayback}
-            disabled={!ready || Boolean(safetyReason)}
-            className="hidden h-6 w-6 shrink-0 items-center justify-center rounded-full text-white/55 transition hover:bg-white/10 hover:text-white disabled:opacity-30 lg:flex"
-            title="Reiniciar música"
-            aria-label="Reiniciar música"
-          >
-            <RotateCcw size={11} />
-          </button>
-        ) : null}
-        {savedUrl ? (
-          <>
-            <button
-              type="button"
-              onClick={playPlayback}
-              disabled={!ready || Boolean(safetyReason)}
-              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full shadow-sm transition ${playing && !safetyReason ? 'bg-[#1DB954] text-white' : 'bg-white text-black hover:scale-105'} disabled:cursor-default disabled:opacity-50`}
-              title={safetyReason ? `Spotify pausado por ${safetyReason}` : 'Reproduzir Spotify'}
-              aria-label="Reproduzir Spotify"
-            >
-              {safetyReason ? <AudioLines size={13} /> : <Play size={13} fill="currentColor" className="translate-x-px" />}
-            </button>
-            <button
-              type="button"
-              onClick={pausePlayback}
-              disabled={!ready}
-              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition ${!playing || safetyReason ? 'bg-white/5 text-white/45 hover:bg-white/10 hover:text-white' : 'bg-white text-black hover:scale-105'} disabled:cursor-default disabled:opacity-35`}
-              title="Pausar Spotify"
-              aria-label="Pausar Spotify"
-            >
-              <Pause size={12} fill="currentColor" />
-            </button>
-          </>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setOpen(true)}
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white text-black shadow-sm transition hover:scale-105"
-            title="Configurar Spotify"
-            aria-label="Configurar Spotify"
-          >
-            <Play size={13} fill="currentColor" className="translate-x-px" />
-          </button>
-        )}
-        <button
-          type="button"
-          onClick={() => setOpen((value) => !value)}
-          className="flex h-6 w-4 shrink-0 items-center justify-center text-white/35 transition hover:text-white"
-          title="Abrir player global do Spotify"
-          aria-label="Abrir player global do Spotify"
-        >
-          <ChevronDown size={11} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
-        </button>
-      </div>
-
-      <div className={`absolute right-0 top-11 z-[80] w-[min(360px,calc(100vw-24px))] origin-top-right rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_24px_70px_rgba(15,23,42,0.28)] transition duration-150 dark:border-slate-700 dark:bg-slate-900 ${open ? 'scale-100 opacity-100' : 'pointer-events-none scale-95 opacity-0'}`}>
+      <div className={`absolute right-0 top-10 z-[80] w-[min(360px,calc(100vw-24px))] origin-top-right rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_24px_70px_rgba(15,23,42,0.28)] transition duration-150 dark:border-slate-700 dark:bg-slate-900 ${open ? 'scale-100 opacity-100' : 'pointer-events-none scale-95 opacity-0'}`}>
         <div className="mb-2 flex items-start justify-between gap-3">
           <div>
             <div className="flex items-center gap-1.5 text-xs font-bold text-slate-900 dark:text-white"><Music2 size={14} className="text-[#1DB954]" /> Música de fundo</div>
