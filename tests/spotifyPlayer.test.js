@@ -34,6 +34,7 @@ test('player global pausa por chamada e áudio sem polling nem API Genesys extra
   assert.match(workspace, /callStateOf\(call\)\?\.stale === true \? 0 : 1/);
   assert.match(player, /document\.addEventListener\('play', markPlaying, true\)/);
   assert.match(player, /sendBridgeCommand\('pause'\)/);
+  assert.match(player, /sendBridgeCommand\('toggle'\)/);
   assert.match(player, /https:\/\/open\.spotify\.com\/oembed\?url=/);
   assert.match(player, /sendBridgeCommand\('restart'\)/);
   assert.match(player, /sendBridgeCommand\('seek'/);
@@ -46,6 +47,7 @@ test('player global pausa por chamada e áudio sem polling nem API Genesys extra
   assert.match(bridgeHtml, /https:\/\/open\.spotify\.com\/embed\/iframe-api\/v1/);
   assert.match(bridge, /iframeApi\.createController/);
   assert.match(bridge, /controller\.pause\(\)/);
+  assert.match(bridge, /controller\.togglePlay\(\)/);
   assert.match(bridge, /controller\.restart\(\)/);
   assert.match(bridge, /controller\.seek\(/);
   assert.match(server, /scriptSrc: \["'self'"\]/);

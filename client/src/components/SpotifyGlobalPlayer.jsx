@@ -256,15 +256,11 @@ const SpotifyGlobalPlayer = ({ userId }) => {
 
   const togglePlayback = () => {
     if (!ready || safetyReason) return;
-    if (playingRef.current) {
-      sendBridgeCommand('pause');
-      setPlaying(false);
-      pausedBySafetyRef.current = false;
-      return;
-    }
-    sendBridgeCommand('resume');
+    const nextPlaying = !playingRef.current;
+    sendBridgeCommand('toggle');
     pausedBySafetyRef.current = false;
-    setPlaying(true);
+    playingRef.current = nextPlaying;
+    setPlaying(nextPlaying);
   };
 
   const restartPlayback = () => {

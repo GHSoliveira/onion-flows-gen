@@ -77,6 +77,7 @@
     if (!controller) return;
     if (action === 'pause') controller.pause();
     if (action === 'resume') controller.resume();
+    if (action === 'toggle') controller.togglePlay();
     if (action === 'restart') controller.restart();
     if (action === 'seek') controller.seek(Math.max(0, Number(event.data.value) || 0));
     if (action === 'destroy') {
