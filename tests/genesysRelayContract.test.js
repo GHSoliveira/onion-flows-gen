@@ -202,14 +202,25 @@ test('ligação chega como card de voz sem virar mensagem e com âncora estável
   assert.match(extension, /function schedulePassiveCallDisconnect/);
   assert.match(extension, /Number\(current\.lastCallLiveAt \|\| 0\) > scheduledAt/);
   assert.match(extension, /clearPendingPassiveCallDisconnect\(conversationId\)/);
-  // No desligamento, o snapshot pode perder `call` antes do card sair do DOM.
-  assert.match(extension, /state\.callUpserted && \(item\?\.agentActive === false \|\| item\?\.active === false\)/);
+  // No desligamento, a perna do cliente pode continuar connected, mas a
+  // ausência da perna ativa do agente é terminal para o card do Onion.
+  assert.match(extension, /if \(item\?\.agentActive === false \|\| item\?\.active === false\)/);
+  assert.match(extension, /schedulePassiveCallDisconnect\(conversationId, now, "participante-agente-inativo"\)/);
+  // Depois do grace, o conversationId recebe tombstone local: keepalive
+  // atrasado não pode reabrir o cronômetro.
+  assert.match(extension, /current\.callTerminalAt = Date\.now\(\)/);
+  assert.match(extension, /if \(Number\(state\.callTerminalAt \|\| 0\) > 0\) return/);
   assert.match(extension, /snapshot\?\.genesysMediaType === "voice"[\s\S]*?conversations\.get\(conversationId\)\?\.callUpserted/);
   assert.match(extension, /if \(item\?\.genesysMediaType === "voice"\) return/);
   assert.match(relay, /genesys_call_state'[\s\S]*?chat: pub/);
   assert.match(workspace, /const incomingChat = event\?\.chat/);
   assert.match(workspace, /setActiveCalls\(\(list\) => \[/);
   assert.match(workspace, /<span>Confirmar<\/span>/);
+  // Mesmo que o socket entregue um connected atrasado depois do disconnected,
+  // a interface mantém um tombstone local e não reinicia o cronômetro.
+  assert.match(workspace, /const terminatedCallIdsRef = useRef\(new Set\(\)\)/);
+  assert.match(workspace, /rememberTerminatedCall\(\.\.\.eventCallIds\)/);
+  assert.match(workspace, /eventCallIds\.some\(\(value\) => terminatedCallIdsRef\.current\.has\(value\)\)/);
 });
 
 test('estado de ligação descarta geração antiga e retry fora de ordem', async () => {
@@ -228,6 +239,10 @@ test('estado de ligação descarta geração antiga e retry fora de ordem', asyn
   assert.match(ligacao, /reason: 'stale_sync_generation'/);
   // Fechamento não pode ressuscitar card inexistente.
   assert.match(ligacao, /!chat && estado === 'disconnected'/);
+  // Nem card já encerrado pode ser reaberto por retry conectado tardio.
+  assert.match(ligacao, /terminal_call_state/);
+  assert.match(relay, /voiceUpsert && closedVoiceConversation/);
+  assert.match(relay, /error: 'Ligacao ja encerrada'/);
   // Silêncio após conectar não é perda de sinal: o Genesys não envia heartbeat.
   assert.match(ligacao, /confirmedConnected: \['connected', 'held'\]\.includes\(estado\)/);
   assert.match(ligacao, /previous\?\.confirmedConnected === true/);

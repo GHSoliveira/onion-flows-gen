@@ -440,6 +440,26 @@ const handleExtUpsertUnlocked = async (socket, payload = {}) => {
     || payload.freezeIdentity === 'true'
     || false;
 
+  const voiceUpsert = ['voice', 'call', 'phone', 'callback'].includes(genesysMediaType);
+  const closedVoiceConversation = Boolean(
+    chat?.status === 'closed'
+    && (
+      isGenesysCallShell(chat)
+      || (chat?.genesysCall && typeof chat.genesysCall === 'object')
+    )
+  );
+  // Uma chamada nunca reutiliza conversationId. Snapshot/keepalive atrasado
+  // não pode criar um segundo documento depois do terminal confirmado.
+  if (voiceUpsert && closedVoiceConversation) {
+    return {
+      ok: false,
+      terminal: true,
+      error: 'Ligacao ja encerrada',
+      chatId: chat.id,
+      convId
+    };
+  }
+
   if (!chat || chat.status === 'closed') {
     created = true;
     const channelUserId = telefone || `genesys_${onlyDigits(convId).slice(-10) || convId.slice(-10)}`;
@@ -1300,6 +1320,24 @@ const handleExtLigacaoUnlocked = async (socket, payload = {}) => {
     return { ok: true, missing: true, convId, estado };
   }
 
+  if (
+    chat?.status === 'closed'
+    && (
+      isGenesysCallShell(chat)
+      || (chat?.genesysCall && typeof chat.genesysCall === 'object')
+    )
+  ) {
+    return {
+      ok: estado === 'disconnected',
+      terminal: true,
+      ignored: true,
+      error: estado === 'disconnected' ? null : 'Ligacao ja encerrada',
+      chatId: chat.id,
+      convId,
+      estado
+    };
+  }
+
   if (!chat) {
     // Reusa o upsert para nascer com identidade, geração e vars coerentes —
     // só marca o tipo como voz para acender o caminho de call shell.
@@ -1351,6 +1389,16 @@ const handleExtLigacaoUnlocked = async (socket, payload = {}) => {
     }
 
     const previous = live.genesysCall && typeof live.genesysCall === 'object' ? live.genesysCall : null;
+
+    if (
+      estado !== 'disconnected'
+      && live.status === 'closed'
+      && (previous?.estado === 'disconnected' || isGenesysCallShell(live))
+    ) {
+      ignoredReason = 'terminal_call_state';
+      liveChat = live;
+      return;
+    }
 
     // O cliente cai já conectado, então toda ligação nasce em `connected`:
     // recusar o evento por falta de âncora sumiria com o card inteiro, e
@@ -1423,7 +1471,8 @@ const handleExtLigacaoUnlocked = async (socket, payload = {}) => {
       reason: ignoredReason || 'nao_aplicado',
       chatId: chat.id,
       convId,
-      estado
+      estado,
+      terminal: ignoredReason === 'terminal_call_state'
     };
   }
 

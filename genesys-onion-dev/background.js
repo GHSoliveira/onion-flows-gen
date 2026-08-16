@@ -2369,6 +2369,7 @@ function conversationState(id) {
     lastCallCustomer: null,
     lastCallLiveAt: 0,
     lastCallObservationAt: 0,
+    callTerminalAt: 0,
     pendingCallDisconnectAt: 0,
     lastCallSignature: "",
     lastCallEmittedAt: 0,
@@ -2410,6 +2411,7 @@ function reviveClosedConversationState(conversationId, state, source = "active-e
   state.lastCallCustomer = null;
   state.lastCallLiveAt = 0;
   state.lastCallObservationAt = 0;
+  state.callTerminalAt = 0;
   state.pendingCallDisconnectAt = 0;
   clearTimeout(passiveCallDisconnectTimers.get(conversationId));
   passiveCallDisconnectTimers.delete(conversationId);
@@ -2621,6 +2623,20 @@ function deliverConversationUpsertToOnion(payload, failureLabel = "Upsert sem co
   });
   return new Promise((resolve) => {
     socket.timeout(ACK_TIMEOUT_MS).emit("ext:atendimento:upsert", payload, (error, response) => {
+      if (response?.terminal === true) {
+        const state = conversationState(conversationId);
+        state.callUpserted = false;
+        state.callTerminalAt = Date.now();
+        state.closed = true;
+        state.closedAt = Date.now();
+        state.lifecycle = "CLOSED";
+        publishSyncDiagnosticStage(conversationId, "upsert_terminal", {
+          reason: response?.error || response?.reason || "already_closed"
+        });
+        log("drop", "Ligação encerrada não foi reaberta", conversationId.slice(0, 8));
+        resolve(false);
+        return;
+      }
       if (error || response?.ok === false) {
         publishSyncDiagnosticStage(conversationId, "upsert_retry", {
           result: error ? "timeout" : "rejected"
@@ -2724,6 +2740,7 @@ function schedulePassiveCallDisconnect(conversationId, observedAt = Date.now(), 
       Date.now()
     );
     current.callUpserted = false;
+    current.callTerminalAt = Date.now();
     if (emitted) {
       log("info", "Ligação encerrada por evento Genesys", `${conversationId.slice(0, 8)} · ${reason}`);
     }
@@ -2757,10 +2774,20 @@ async function processPassiveCallStates(message = {}) {
       const state = conversationState(conversationId);
       if (now < Number(state.lastCallObservationAt || 0)) return;
       state.lastCallObservationAt = now;
-      if (!call || !["alerting", "connected", "held", "disconnected"].includes(estado)) {
-        if (state.callUpserted && (item?.agentActive === false || item?.active === false)) {
-          schedulePassiveCallDisconnect(conversationId, now, "participante-inativo");
+      // conversationId de voz é único. Depois que o terminal foi confirmado,
+      // snapshot atrasado da perna do cliente nunca pode ressuscitar o card.
+      if (Number(state.callTerminalAt || 0) > 0) return;
+      // O Genesys pode manter a perna do cliente como `connected` por alguns
+      // instantes depois que a perna do agente já terminou. Para o Onion, a
+      // presença ativa do agente é a autoridade: agenda o fechamento e não
+      // deixa o pseudo-connected residual cancelar o timer.
+      if (item?.agentActive === false || item?.active === false) {
+        if (state.callUpserted) {
+          schedulePassiveCallDisconnect(conversationId, now, "participante-agente-inativo");
         }
+        return;
+      }
+      if (!call || !["alerting", "connected", "held", "disconnected"].includes(estado)) {
         return;
       }
       if (item?.agentActive === true) {

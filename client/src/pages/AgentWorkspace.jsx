@@ -691,6 +691,7 @@ const AgentWorkspace = () => {
   const [acknowledgedCalls, setAcknowledgedCalls] = useState(loadAcknowledgedCalls);
   const activeCallsRef = useRef([]);
   const activeCallsLoadedRef = useRef(false);
+  const terminatedCallIdsRef = useRef(new Set());
   const [callClockNow, setCallClockNow] = useState(() => Date.now());
   const [ringerBlocked, setRingerBlocked] = useState(false);
 
@@ -1733,9 +1734,16 @@ const AgentWorkspace = () => {
       if (res && res.ok) {
         const data = await res.json();
         // Server já separa, mas reforça no client (socket/patches antigos)
-        const activeCallsRaw = Array.isArray(data.activeCalls)
+        const activeCallsRawUnfiltered = Array.isArray(data.activeCalls)
           ? onlyCallShells(data.activeCalls)
           : onlyCallShells(Array.isArray(data.active) ? data.active : []);
+        const activeCallsRaw = activeCallsRawUnfiltered.filter((chat) => {
+          const terminated = terminatedCallIdsRef.current;
+          return ![chat?.id, chat?.genesysConvId, chat?.externalConvId]
+            .map((value) => String(value || ''))
+            .filter(Boolean)
+            .some((value) => terminated.has(value));
+        });
         const waitingRaw = onlyMessagingChats(Array.isArray(data.waiting) ? data.waiting : []);
         const activeRaw = onlyMessagingChats(Array.isArray(data.active) ? data.active : []);
         const all = [...activeRaw, ...waitingRaw];
@@ -1892,6 +1900,16 @@ const AgentWorkspace = () => {
     let refreshTimeout = null;
     let lastSocketRefreshAt = 0;
     const assignmentMembershipByChat = new Map();
+    const rememberTerminatedCall = (...values) => {
+      const terminated = terminatedCallIdsRef.current;
+      values
+        .map((value) => String(value || ''))
+        .filter(Boolean)
+        .forEach((value) => terminated.add(value));
+      while (terminated.size > 200) {
+        terminated.delete(terminated.values().next().value);
+      }
+    };
     const refresh = (minimumDelayMs = 150) => {
       clearTimeout(refreshTimeout);
       const cooldownMs = Math.max(0, 1500 - (Date.now() - lastSocketRefreshAt));
@@ -2151,13 +2169,26 @@ const AgentWorkspace = () => {
         )
       );
 
+      const eventCallIds = [
+        chatId,
+        convId,
+        incomingChat?.id,
+        incomingChat?.genesysConvId,
+        incomingChat?.externalConvId,
+      ].map((value) => String(value || '')).filter(Boolean);
+
       if (call.estado === 'disconnected') {
+        rememberTerminatedCall(...eventCallIds);
         activeCallsLoadedRef.current = true;
         setActiveCalls((list) => (Array.isArray(list) ? list : []).filter((chat) => !matches(chat)));
         setMyChats((list) => (Array.isArray(list) ? list : []).filter((chat) => !matches(chat)));
         setWaitingChats((list) => (Array.isArray(list) ? list : []).filter((chat) => !matches(chat)));
         return;
       }
+
+      // Socket pode entregar retry/keepalive antigo depois do disconnected.
+      // O mesmo conversationId jamais representa uma segunda chamada.
+      if (eventCallIds.some((value) => terminatedCallIdsRef.current.has(value))) return;
 
       activeCallsLoadedRef.current = true;
       setMyChats((list) => (Array.isArray(list) ? list : []).filter((chat) => !matches(chat)));
@@ -2189,6 +2220,7 @@ const AgentWorkspace = () => {
     const handleChatClosed = (event) => {
       const closedId = event?.chatId;
       const closedConvId = String(event?.convId || '');
+      rememberTerminatedCall(closedId, closedConvId);
       const isClosedChat = (chat) => Boolean(
         chat
         && (
