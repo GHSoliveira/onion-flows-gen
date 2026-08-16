@@ -1,5 +1,6 @@
-const SPOTIFY_CLIENT_ID = 'c9f47761773a46948558e534739cceab';
+const DEFAULT_SPOTIFY_CLIENT_ID = 'c9f47761773a46948558e534739cceab';
 const SPOTIFY_REDIRECT_URI = 'http://127.0.0.1:3101/spotify/callback';
+const SPOTIFY_DASHBOARD_URL = 'https://developer.spotify.com/dashboard';
 const SPOTIFY_SCOPES = [
   'streaming',
   'user-read-email',
@@ -11,6 +12,7 @@ const SPOTIFY_SCOPES = [
 
 const TOKEN_KEY = 'onionSpotifyOAuth';
 const TRANSACTION_KEY = 'onionSpotifyOAuthTransaction';
+const CLIENT_ID_KEY = 'onionSpotifyClientId';
 const listeners = new Set();
 let refreshPromise = null;
 let completionPromise = null;
@@ -27,9 +29,24 @@ const writeJson = (key, value) => {
   localStorage.setItem(key, JSON.stringify(value));
 };
 
+const normalizeClientId = (value) => String(value || '').trim();
+
+export const isValidSpotifyClientId = (value) => /^[A-Za-z0-9]{32}$/.test(normalizeClientId(value));
+
+export const getSpotifyClientId = () => {
+  const configured = normalizeClientId(localStorage.getItem(CLIENT_ID_KEY));
+  return isValidSpotifyClientId(configured) ? configured : DEFAULT_SPOTIFY_CLIENT_ID;
+};
+
+export const hasCustomSpotifyClientId = () => Boolean(
+  isValidSpotifyClientId(localStorage.getItem(CLIENT_ID_KEY)),
+);
+
 const readTokenState = () => {
   const value = readJson(TOKEN_KEY);
   if (!value?.accessToken || !value?.refreshToken) return null;
+  const tokenClientId = normalizeClientId(value.clientId || DEFAULT_SPOTIFY_CLIENT_ID);
+  if (tokenClientId !== getSpotifyClientId()) return null;
   return value;
 };
 
@@ -125,15 +142,17 @@ export const startSpotifyAuthorization = async (returnTo = '/agent') => {
   const verifier = randomUrlSafe(64);
   const state = randomUrlSafe(32);
   const challenge = await sha256Challenge(verifier);
+  const clientId = getSpotifyClientId();
   writeJson(TRANSACTION_KEY, {
     verifier,
     state,
+    clientId,
     returnTo: String(returnTo || '/agent'),
     createdAt: Date.now(),
   });
   const authorizeUrl = new URL('https://accounts.spotify.com/authorize');
   authorizeUrl.search = new URLSearchParams({
-    client_id: SPOTIFY_CLIENT_ID,
+    client_id: clientId,
     response_type: 'code',
     redirect_uri: SPOTIFY_REDIRECT_URI,
     code_challenge_method: 'S256',
@@ -158,8 +177,12 @@ const completeSpotifyAuthorizationOnce = async (search) => {
   if (Date.now() - Number(transaction.createdAt || 0) > 10 * 60 * 1000) {
     throw new Error('spotify_callback_expirado');
   }
+  const clientId = normalizeClientId(transaction.clientId || getSpotifyClientId());
+  if (!isValidSpotifyClientId(clientId) || clientId !== getSpotifyClientId()) {
+    throw new Error('spotify_client_id_mudou_durante_login');
+  }
   const token = await exchangeToken({
-    client_id: SPOTIFY_CLIENT_ID,
+    client_id: clientId,
     grant_type: 'authorization_code',
     code,
     redirect_uri: SPOTIFY_REDIRECT_URI,
@@ -167,6 +190,7 @@ const completeSpotifyAuthorizationOnce = async (search) => {
   });
   const profile = await fetchProfile(token.access_token);
   writeJson(TOKEN_KEY, {
+    clientId,
     accessToken: token.access_token,
     refreshToken: token.refresh_token,
     expiresAt: Date.now() + (Math.max(60, Number(token.expires_in) || 3600) * 1000),
@@ -192,8 +216,9 @@ const refreshSpotifyAccessToken = async () => {
   refreshPromise = (async () => {
     const current = readTokenState();
     if (!current?.refreshToken) throw new Error('spotify_nao_conectado');
+    const clientId = normalizeClientId(current.clientId || getSpotifyClientId());
     const token = await exchangeToken({
-      client_id: SPOTIFY_CLIENT_ID,
+      client_id: clientId,
       grant_type: 'refresh_token',
       refresh_token: current.refreshToken,
     });
@@ -259,11 +284,41 @@ export const disconnectSpotify = () => {
   publish();
 };
 
+export const configureSpotifyClientId = (value) => {
+  const clientId = normalizeClientId(value);
+  if (!isValidSpotifyClientId(clientId)) {
+    throw new Error('spotify_client_id_invalido');
+  }
+  if (clientId !== getSpotifyClientId() || !hasCustomSpotifyClientId()) {
+    localStorage.setItem(CLIENT_ID_KEY, clientId);
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(TRANSACTION_KEY);
+    publish();
+  }
+  return clientId;
+};
+
+export const useDefaultSpotifyClientId = () => {
+  const changed = hasCustomSpotifyClientId();
+  localStorage.removeItem(CLIENT_ID_KEY);
+  if (changed) {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(TRANSACTION_KEY);
+    publish();
+  }
+  return DEFAULT_SPOTIFY_CLIENT_ID;
+};
+
 window.addEventListener('storage', (event) => {
-  if (event.key === TOKEN_KEY) publish();
+  if (event.key === TOKEN_KEY || event.key === CLIENT_ID_KEY) publish();
 });
 
 export const spotifyAuthConfig = {
-  clientId: SPOTIFY_CLIENT_ID,
+  get clientId() {
+    return getSpotifyClientId();
+  },
+  defaultClientId: DEFAULT_SPOTIFY_CLIENT_ID,
   redirectUri: SPOTIFY_REDIRECT_URI,
+  dashboardUrl: SPOTIFY_DASHBOARD_URL,
+  websiteUrl: 'http://127.0.0.1:3101',
 };

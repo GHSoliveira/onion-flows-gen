@@ -1,12 +1,18 @@
 import { useEffect, useState } from 'react';
 import { Loader2, Music2 } from 'lucide-react';
-import { completeSpotifyAuthorization } from '../services/spotifyAuth';
+import { completeSpotifyAuthorization, spotifyAuthConfig } from '../services/spotifyAuth';
+
+const shortClientId = () => {
+  const value = String(spotifyAuthConfig.clientId || '');
+  return value.length > 12 ? `${value.slice(0, 6)}…${value.slice(-6)}` : value;
+};
 
 const describeCallbackError = (error) => {
   const message = String(error?.message || 'spotify_callback_falhou');
   if (message.startsWith('spotify_profile_403_allowlist')) {
-    return 'O Spotify emitiu o token, mas bloqueou esta conta no perfil. Confirme se o e-mail desta conta está em User Management no app de Client ID c9f477…cceab e conecte novamente com essa mesma conta.';
+    return `O Spotify emitiu o token, mas bloqueou esta conta no perfil. Confira o app ${shortClientId()} ou configure um aplicativo próprio no Onion.`;
   }
+  if (message === 'spotify_client_id_mudou_durante_login') return 'O Client ID mudou durante o login. Volte ao Onion e tente novamente.';
   if (message.startsWith('spotify_profile_401')) {
     return 'O Spotify recusou o token ao consultar o perfil. Volte ao Onion e conecte a conta novamente.';
   }
