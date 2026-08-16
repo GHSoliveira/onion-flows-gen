@@ -40,8 +40,18 @@ const loadSpotifyApi = () => {
   if (spotifyApiPromise) return spotifyApiPromise;
 
   spotifyApiPromise = new Promise((resolve, reject) => {
+    let settled = false;
+    const timeoutId = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      spotifyApiPromise = undefined;
+      reject(new Error('spotify_api_timeout'));
+    }, 12000);
     const previousReady = window.onSpotifyIframeApiReady;
     window.onSpotifyIframeApiReady = (api) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeoutId);
       window.__onionSpotifyIframeApi = api;
       if (typeof previousReady === 'function') previousReady(api);
       resolve(api);
@@ -49,7 +59,13 @@ const loadSpotifyApi = () => {
 
     const existing = document.getElementById(SPOTIFY_SCRIPT_ID);
     if (existing) {
-      existing.addEventListener('error', () => reject(new Error('spotify_api_indisponivel')), { once: true });
+      existing.addEventListener('error', () => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeoutId);
+        spotifyApiPromise = undefined;
+        reject(new Error('spotify_api_indisponivel'));
+      }, { once: true });
       return;
     }
 
@@ -58,6 +74,9 @@ const loadSpotifyApi = () => {
     script.src = SPOTIFY_SCRIPT_URL;
     script.async = true;
     script.addEventListener('error', () => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeoutId);
       spotifyApiPromise = undefined;
       reject(new Error('spotify_api_indisponivel'));
     }, { once: true });
@@ -197,6 +216,11 @@ const SpotifyGlobalPlayer = ({ userId }) => {
             return;
           }
           controllerRef.current = controller;
+          // O callback confirma que já existe um controller utilizável. Alguns
+          // navegadores perdem o evento `ready` quando o iframe conclui muito
+          // rápido; ele não pode manter o card preso em "Carregando".
+          setReady(true);
+          setLoading(false);
           controller.addListener('ready', () => {
             setReady(true);
             setLoading(false);
