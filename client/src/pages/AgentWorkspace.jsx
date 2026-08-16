@@ -27,6 +27,7 @@ import { resolveGenesysConversationAssignedAt } from '../utils/genesysInactivity
 import { summarizeIxcOsAlerts } from '../utils/ixcOsAlerts';
 import { findIxcSectorSuggestion, IXC_SECTOR_OPTIONS } from '../utils/ixcSectorCatalog';
 import { bindRingerUnlock, startRinging, stopRinging, subscribeRinger } from '../utils/callRinger';
+import { setGenesysActiveCallCount } from '../services/playbackSafety';
 
 const chatOrderStorageKey = (userId, listKey) => `agentChatOrder:${userId || 'anon'}:${listKey}`;
 const chatSortStorageKey = (userId) => `agentChatSort:${userId || 'anon'}`;
@@ -748,6 +749,15 @@ const AgentWorkspace = () => {
       return next;
     });
   }, [activeCalls]);
+
+  const spotifyActiveCallCount = activeCalls.reduce(
+    (count, call) => count + (callStateOf(call)?.stale === true ? 0 : 1),
+    0,
+  );
+  useEffect(() => {
+    setGenesysActiveCallCount(spotifyActiveCallCount);
+  }, [spotifyActiveCallCount]);
+  useEffect(() => () => setGenesysActiveCallCount(0), []);
   const [chatSort, setChatSort] = useState(() => readChatSort(user?.id));
   const [chatSortDraft, setChatSortDraft] = useState(() => readChatSort(user?.id));
   const [draggingChatId, setDraggingChatId] = useState(null);

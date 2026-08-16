@@ -205,14 +205,15 @@ app.use(compression());
 // styleSrc continua aceitando 'unsafe-inline' porque React + react-flow usam
 // `style={{}}` inline em massa (posicionamento de nodes, transforms, handles).
 // Refatorar para CSS classes não é viável sem trocar a lib do editor de fluxo.
-// scriptSrc continua restrito a 'self' — XSS por <script> injetado bloqueado.
+// Spotify iFrame API e o frame oficial são as únicas origens externas executáveis.
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'"],
+      scriptSrc: ["'self'", "https://open.spotify.com"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:", "https:"],
+      frameSrc: ["'self'", "https://open.spotify.com"],
       connectSrc: [
         "'self'",
         ...(NODE_ENV === 'development' ? [

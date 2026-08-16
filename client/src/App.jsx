@@ -13,6 +13,7 @@ import {
   Shield, BrainCircuit
 } from 'lucide-react';
 import OnionBrandIcon from './components/OnionBrandIcon';
+import SpotifyGlobalPlayer from './components/SpotifyGlobalPlayer';
 
 
 const FlowList = lazy(() => import('./pages/FlowList'));
@@ -598,6 +599,7 @@ const AppContent = () => {
           </button>
 
           <div className="flex items-center gap-2 ml-auto">
+            {isAgentWorkspace ? <SpotifyGlobalPlayer userId={user?.id} /> : null}
             {user.role === 'SUPER_ADMIN' && tenant?.id && tenant.id !== 'super_admin' && (
               <span className="px-2.5 py-1 rounded-full text-xs font-semibold border border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800/50 dark:bg-blue-900/30 dark:text-blue-300">
                 Tenant: {tenant.id}
