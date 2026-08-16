@@ -6,9 +6,9 @@ import {
 } from '../services/playbackSafety';
 import { normalizeSpotifyContentUrl } from '../utils/spotifyPlayer';
 
-const SPOTIFY_SCRIPT_ID = 'onion-spotify-iframe-api';
-const SPOTIFY_SCRIPT_URL = 'https://open.spotify.com/embed/iframe-api/v1';
-let spotifyApiPromise;
+const SPOTIFY_BRIDGE_PATH = '/spotify-embed-bridge.html';
+const SPOTIFY_BRIDGE_COMMAND = 'onion:spotify:bridge:command';
+const SPOTIFY_BRIDGE_EVENT = 'onion:spotify:bridge:event';
 const spotifyMetadataCache = new Map();
 
 const formatPlaybackTime = (milliseconds) => {
@@ -33,57 +33,6 @@ const loadSpotifyMetadata = async (url, signal) => {
   };
   spotifyMetadataCache.set(normalized, metadata);
   return metadata;
-};
-
-const loadSpotifyApi = () => {
-  if (window.__onionSpotifyIframeApi) return Promise.resolve(window.__onionSpotifyIframeApi);
-  if (spotifyApiPromise) return spotifyApiPromise;
-
-  spotifyApiPromise = new Promise((resolve, reject) => {
-    let settled = false;
-    const timeoutId = window.setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      spotifyApiPromise = undefined;
-      reject(new Error('spotify_api_timeout'));
-    }, 12000);
-    const previousReady = window.onSpotifyIframeApiReady;
-    window.onSpotifyIframeApiReady = (api) => {
-      if (settled) return;
-      settled = true;
-      window.clearTimeout(timeoutId);
-      window.__onionSpotifyIframeApi = api;
-      if (typeof previousReady === 'function') previousReady(api);
-      resolve(api);
-    };
-
-    const existing = document.getElementById(SPOTIFY_SCRIPT_ID);
-    if (existing) {
-      existing.addEventListener('error', () => {
-        if (settled) return;
-        settled = true;
-        window.clearTimeout(timeoutId);
-        spotifyApiPromise = undefined;
-        reject(new Error('spotify_api_indisponivel'));
-      }, { once: true });
-      return;
-    }
-
-    const script = document.createElement('script');
-    script.id = SPOTIFY_SCRIPT_ID;
-    script.src = SPOTIFY_SCRIPT_URL;
-    script.async = true;
-    script.addEventListener('error', () => {
-      if (settled) return;
-      settled = true;
-      window.clearTimeout(timeoutId);
-      spotifyApiPromise = undefined;
-      reject(new Error('spotify_api_indisponivel'));
-    }, { once: true });
-    document.head.appendChild(script);
-  });
-
-  return spotifyApiPromise;
 };
 
 const spotifyStorageKey = (userId) => `onionSpotifyContent:${userId || 'anon'}`;
@@ -139,10 +88,11 @@ const SpotifyGlobalPlayer = ({ userId }) => {
   );
   const localAudioCount = useLocalAudioActivity();
   const rootRef = useRef(null);
-  const embedRef = useRef(null);
-  const controllerRef = useRef(null);
+  const bridgeRef = useRef(null);
+  const bridgeTimeoutRef = useRef(null);
   const pausedBySafetyRef = useRef(false);
   const playingRef = useRef(false);
+  const [bridgeLoaded, setBridgeLoaded] = useState(false);
   const [open, setOpen] = useState(false);
   const [savedUrl, setSavedUrl] = useState(() => readSavedUrl(userId));
   const [draftUrl, setDraftUrl] = useState(() => readSavedUrl(userId));
@@ -193,77 +143,84 @@ const SpotifyGlobalPlayer = ({ userId }) => {
   }, []);
 
   useEffect(() => {
-    if (!savedUrl || !embedRef.current) return undefined;
-    let disposed = false;
-    setLoading(true);
-    setError('');
-
-    loadSpotifyApi()
-      .then((api) => {
-        if (disposed || !embedRef.current) return;
-        if (controllerRef.current) {
-          controllerRef.current.loadEntity(savedUrl);
-          setLoading(false);
-          return;
-        }
-        api.createController(embedRef.current, {
-          url: savedUrl,
-          width: '100%',
-          height: 152,
-        }, (controller) => {
-          if (disposed) {
-            controller.destroy();
-            return;
-          }
-          controllerRef.current = controller;
-          // O callback confirma que já existe um controller utilizável. Alguns
-          // navegadores perdem o evento `ready` quando o iframe conclui muito
-          // rápido; ele não pode manter o card preso em "Carregando".
-          setReady(true);
-          setLoading(false);
-          controller.addListener('ready', () => {
-            setReady(true);
-            setLoading(false);
-          });
-          controller.addListener('playback_started', (event) => {
-            const playingUrl = normalizeSpotifyContentUrl(event?.data?.playingURI || '');
-            if (playingUrl) setCurrentEntityUrl(playingUrl);
-            setPlaying(true);
-          });
-          controller.addListener('playback_update', (event) => {
-            const playingUrl = normalizeSpotifyContentUrl(event?.data?.playingURI || '');
-            if (playingUrl) setCurrentEntityUrl((current) => current === playingUrl ? current : playingUrl);
-            setPlayback({
-              duration: Math.max(0, Number(event?.data?.duration) || 0),
-              position: Math.max(0, Number(event?.data?.position) || 0),
-            });
-            setPlaying(event?.data?.isPaused === false);
-          });
+    const handleBridgeEvent = (event) => {
+      if (event.source !== bridgeRef.current?.contentWindow) return;
+      if (event.data?.type !== SPOTIFY_BRIDGE_EVENT) return;
+      const { event: eventName, data } = event.data;
+      if (eventName === 'controller-created' || eventName === 'ready') {
+        window.clearTimeout(bridgeTimeoutRef.current);
+        bridgeTimeoutRef.current = null;
+        setReady(true);
+        setLoading(false);
+        setError('');
+        return;
+      }
+      if (eventName === 'playback-started') {
+        const playingUrl = normalizeSpotifyContentUrl(data?.playingURI || '');
+        if (playingUrl) setCurrentEntityUrl(playingUrl);
+        setPlaying(true);
+        return;
+      }
+      if (eventName === 'playback-update') {
+        const playingUrl = normalizeSpotifyContentUrl(data?.playingURI || '');
+        if (playingUrl) setCurrentEntityUrl((current) => current === playingUrl ? current : playingUrl);
+        setPlayback({
+          duration: Math.max(0, Number(data?.duration) || 0),
+          position: Math.max(0, Number(data?.position) || 0),
         });
-      })
-      .catch(() => {
-        if (!disposed) {
-          setLoading(false);
-          setError('Não foi possível carregar o player.');
-        }
-      });
+        setPlaying(data?.isPaused === false);
+        return;
+      }
+      if (eventName === 'error') {
+        window.clearTimeout(bridgeTimeoutRef.current);
+        bridgeTimeoutRef.current = null;
+        setLoading(false);
+        setReady(false);
+        setError('O Spotify bloqueou a inicialização do player.');
+      }
+    };
+    window.addEventListener('message', handleBridgeEvent);
+    return () => window.removeEventListener('message', handleBridgeEvent);
+  }, []);
+
+  const sendBridgeCommand = (action, value) => {
+    bridgeRef.current?.contentWindow?.postMessage({
+      type: SPOTIFY_BRIDGE_COMMAND,
+      action,
+      value,
+    }, '*');
+  };
+
+  useEffect(() => {
+    if (!savedUrl || !bridgeLoaded) return undefined;
+    setLoading(true);
+    setReady(false);
+    setError('');
+    sendBridgeCommand('load', savedUrl);
+    window.clearTimeout(bridgeTimeoutRef.current);
+    bridgeTimeoutRef.current = window.setTimeout(() => {
+      setLoading(false);
+      setReady(false);
+      setError('O Spotify não respondeu. Abra o painel e tente novamente.');
+    }, 15000);
 
     return () => {
-      disposed = true;
+      window.clearTimeout(bridgeTimeoutRef.current);
+      bridgeTimeoutRef.current = null;
     };
-  }, [savedUrl]);
+  }, [bridgeLoaded, hostKey, savedUrl]);
 
   useEffect(() => () => {
-    controllerRef.current?.destroy?.();
-    controllerRef.current = null;
+    window.clearTimeout(bridgeTimeoutRef.current);
+    sendBridgeCommand('destroy');
   }, []);
 
   useEffect(() => {
-    if (!safetyReason || !controllerRef.current) return;
+    if (!safetyReason || !ready) return;
     if (playingRef.current) pausedBySafetyRef.current = true;
-    controllerRef.current.pause();
+    sendBridgeCommand('pause');
     setPlaying(false);
-  }, [playing, safetyReason]);
+  }, [playing, ready, safetyReason]);
 
   const saveContent = () => {
     const normalized = normalizeSpotifyContentUrl(draftUrl);
@@ -282,8 +239,7 @@ const SpotifyGlobalPlayer = ({ userId }) => {
   };
 
   const clearContent = () => {
-    controllerRef.current?.destroy?.();
-    controllerRef.current = null;
+    sendBridgeCommand('destroy');
     try { localStorage.removeItem(spotifyStorageKey(userId)); } catch {}
     setSavedUrl('');
     setDraftUrl('');
@@ -293,35 +249,36 @@ const SpotifyGlobalPlayer = ({ userId }) => {
     setReady(false);
     setPlaying(false);
     setError('');
+    setBridgeLoaded(false);
     setHostKey((value) => value + 1);
     pausedBySafetyRef.current = false;
   };
 
   const togglePlayback = () => {
-    if (!controllerRef.current || !ready || safetyReason) return;
+    if (!ready || safetyReason) return;
     if (playingRef.current) {
-      controllerRef.current.pause();
+      sendBridgeCommand('pause');
       setPlaying(false);
       pausedBySafetyRef.current = false;
       return;
     }
-    controllerRef.current.resume();
+    sendBridgeCommand('resume');
     pausedBySafetyRef.current = false;
     setPlaying(true);
   };
 
   const restartPlayback = () => {
-    if (!controllerRef.current || !ready || safetyReason) return;
-    controllerRef.current.restart();
+    if (!ready || safetyReason) return;
+    sendBridgeCommand('restart');
     pausedBySafetyRef.current = false;
     setPlaying(true);
   };
 
   const seekPlayback = (event) => {
-    if (!controllerRef.current || !playback.duration) return;
+    if (!ready || !playback.duration) return;
     const bounds = event.currentTarget.getBoundingClientRect();
     const ratio = Math.min(1, Math.max(0, (event.clientX - bounds.left) / Math.max(1, bounds.width)));
-    controllerRef.current.seek((playback.duration * ratio) / 1000);
+    sendBridgeCommand('seek', (playback.duration * ratio) / 1000);
   };
 
   const status = safetyReason
@@ -441,7 +398,16 @@ const SpotifyGlobalPlayer = ({ userId }) => {
         </div>
 
         <div className={savedUrl ? 'mb-2 overflow-hidden rounded-xl bg-black' : 'hidden'}>
-          <div key={hostKey} ref={embedRef} className="min-h-[152px] w-full" />
+          <iframe
+            key={hostKey}
+            ref={bridgeRef}
+            src={SPOTIFY_BRIDGE_PATH}
+            title="Player do Spotify"
+            sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+            allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+            onLoad={() => setBridgeLoaded(true)}
+            className="h-[152px] w-full border-0"
+          />
         </div>
 
         <div className="flex gap-1.5">

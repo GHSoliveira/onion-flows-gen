@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Spotify Player Bridge</title>
+    <style nonce="__SPOTIFY_CSP_NONCE__">
+      html, body, #spotify-embed { width: 100%; height: 152px; margin: 0; overflow: hidden; background: #000; }
+      iframe { display: block; border: 0; }
+    </style>
+  </head>
+  <body>
+    <output id="spotify-bridge-status" hidden>booting</output>
+    <div id="spotify-embed"></div>
+    <script nonce="__SPOTIFY_CSP_NONCE__">__SPOTIFY_BRIDGE_SOURCE__</script>
+    <script nonce="__SPOTIFY_CSP_NONCE__" src="https://open.spotify.com/embed/iframe-api/v1"></script>
+  </body>
+</html>

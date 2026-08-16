@@ -8,6 +8,7 @@ import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import fs from 'fs';
 import path from 'path';
+import { randomBytes } from 'crypto';
 import { fileURLToPath } from 'url';
 import adapter from './db/DatabaseAdapter.js';
 import { setIo } from './src/services/logs.js';
@@ -205,15 +206,16 @@ app.use(compression());
 // styleSrc continua aceitando 'unsafe-inline' porque React + react-flow usam
 // `style={{}}` inline em massa (posicionamento de nodes, transforms, handles).
 // Refatorar para CSS classes não é viável sem trocar a lib do editor de fluxo.
-// Spotify iFrame API e o frame oficial são as únicas origens externas executáveis.
+// Scripts da aplicação continuam restritos a `self`. O controller do Spotify,
+// que depende de `unsafe-eval`, roda apenas em um iframe sandboxed com CSP próprio.
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "https://open.spotify.com", "https://embed-cdn.spotifycdn.com"],
+      scriptSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:", "https:"],
-      frameSrc: ["'self'", "https://open.spotify.com"],
+      frameSrc: ["'self'"],
       connectSrc: [
         "'self'",
         "https://open.spotify.com",
@@ -588,6 +590,35 @@ app.use('/uploads', (req, res, next) => {
 }, express.static(uploadsRoot));
 
 const clientDistPath = path.join(__dirname, 'client', 'dist');
+app.get('/spotify-embed-bridge.html', (req, res, next) => {
+  const nonce = randomBytes(18).toString('base64');
+  const bridgePath = path.join(clientDistPath, 'spotify-embed-bridge.html');
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Content-Security-Policy', [
+    "default-src 'none'",
+    `script-src 'nonce-${nonce}' 'unsafe-eval' https://open.spotify.com https://embed-cdn.spotifycdn.com`,
+    `style-src 'nonce-${nonce}'`,
+    "frame-src https://open.spotify.com",
+    "connect-src https://open.spotify.com",
+    "img-src https: data:",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-ancestors 'self'",
+  ].join(';'));
+  fs.readFile(bridgePath, 'utf8', (error, html) => {
+    if (error) return next(error);
+    const bridgeScriptPath = path.join(clientDistPath, 'spotify-embed-bridge.js');
+    fs.readFile(bridgeScriptPath, 'utf8', (scriptError, bridgeScript) => {
+      if (scriptError) return next(scriptError);
+      const safeBridgeScript = bridgeScript.replaceAll('</script>', '<\\/script>');
+      res.type('html').send(
+        html
+          .replace('__SPOTIFY_BRIDGE_SOURCE__', safeBridgeScript)
+          .replaceAll('__SPOTIFY_CSP_NONCE__', nonce)
+      );
+    });
+  });
+});
 app.use(express.static(clientDistPath));
 
 // SPA local: rotas do React retornam o mesmo bundle, sem servidor Vite/HMR.
