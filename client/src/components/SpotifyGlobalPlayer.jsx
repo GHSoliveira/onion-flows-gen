@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { AudioLines, ChevronDown, ExternalLink, Music2, Pause, Play, Save, Trash2 } from 'lucide-react';
+import { AudioLines, ChevronDown, ExternalLink, Music2, Pause, Play, RotateCcw, Save, Trash2 } from 'lucide-react';
 import {
   getPlaybackSafetySnapshot,
   subscribePlaybackSafety,
@@ -9,6 +9,31 @@ import { normalizeSpotifyContentUrl } from '../utils/spotifyPlayer';
 const SPOTIFY_SCRIPT_ID = 'onion-spotify-iframe-api';
 const SPOTIFY_SCRIPT_URL = 'https://open.spotify.com/embed/iframe-api/v1';
 let spotifyApiPromise;
+const spotifyMetadataCache = new Map();
+
+const formatPlaybackTime = (milliseconds) => {
+  const seconds = Math.max(0, Math.floor((Number(milliseconds) || 0) / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+};
+
+const loadSpotifyMetadata = async (url, signal) => {
+  const normalized = normalizeSpotifyContentUrl(url);
+  if (!normalized) return null;
+  if (spotifyMetadataCache.has(normalized)) return spotifyMetadataCache.get(normalized);
+  const response = await fetch(`https://open.spotify.com/oembed?url=${encodeURIComponent(normalized)}`, {
+    method: 'GET',
+    signal,
+    credentials: 'omit',
+  });
+  if (!response.ok) throw new Error(`spotify_oembed_${response.status}`);
+  const payload = await response.json();
+  const metadata = {
+    title: String(payload?.title || 'Spotify').trim(),
+    thumbnailUrl: String(payload?.thumbnail_url || '').trim(),
+  };
+  spotifyMetadataCache.set(normalized, metadata);
+  return metadata;
+};
 
 const loadSpotifyApi = () => {
   if (window.__onionSpotifyIframeApi) return Promise.resolve(window.__onionSpotifyIframeApi);
@@ -107,6 +132,9 @@ const SpotifyGlobalPlayer = ({ userId }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [hostKey, setHostKey] = useState(0);
+  const [currentEntityUrl, setCurrentEntityUrl] = useState(() => readSavedUrl(userId));
+  const [metadata, setMetadata] = useState({ title: 'Spotify', thumbnailUrl: '' });
+  const [playback, setPlayback] = useState({ duration: 0, position: 0 });
 
   const safetyReason = useMemo(() => {
     if (safety.activeCallCount > 0) return 'ligação em andamento';
@@ -117,6 +145,25 @@ const SpotifyGlobalPlayer = ({ userId }) => {
   useEffect(() => {
     playingRef.current = playing;
   }, [playing]);
+
+  useEffect(() => {
+    const targetUrl = normalizeSpotifyContentUrl(currentEntityUrl || savedUrl);
+    if (!targetUrl) {
+      setMetadata({ title: 'Spotify', thumbnailUrl: '' });
+      return undefined;
+    }
+    const controller = new AbortController();
+    loadSpotifyMetadata(targetUrl, controller.signal)
+      .then((nextMetadata) => {
+        if (nextMetadata) setMetadata(nextMetadata);
+      })
+      .catch((fetchError) => {
+        if (fetchError?.name !== 'AbortError') {
+          setMetadata((current) => ({ ...current, title: current.title || 'Spotify' }));
+        }
+      });
+    return () => controller.abort();
+  }, [currentEntityUrl, savedUrl]);
 
   useEffect(() => {
     const closeOnOutsideClick = (event) => {
@@ -154,10 +201,18 @@ const SpotifyGlobalPlayer = ({ userId }) => {
             setReady(true);
             setLoading(false);
           });
-          controller.addListener('playback_started', () => {
+          controller.addListener('playback_started', (event) => {
+            const playingUrl = normalizeSpotifyContentUrl(event?.data?.playingURI || '');
+            if (playingUrl) setCurrentEntityUrl(playingUrl);
             setPlaying(true);
           });
           controller.addListener('playback_update', (event) => {
+            const playingUrl = normalizeSpotifyContentUrl(event?.data?.playingURI || '');
+            if (playingUrl) setCurrentEntityUrl((current) => current === playingUrl ? current : playingUrl);
+            setPlayback({
+              duration: Math.max(0, Number(event?.data?.duration) || 0),
+              position: Math.max(0, Number(event?.data?.position) || 0),
+            });
             setPlaying(event?.data?.isPaused === false);
           });
         });
@@ -198,6 +253,8 @@ const SpotifyGlobalPlayer = ({ userId }) => {
     setError('');
     setDraftUrl(normalized);
     setSavedUrl(normalized);
+    setCurrentEntityUrl(normalized);
+    setPlayback({ duration: 0, position: 0 });
   };
 
   const clearContent = () => {
@@ -206,6 +263,9 @@ const SpotifyGlobalPlayer = ({ userId }) => {
     try { localStorage.removeItem(spotifyStorageKey(userId)); } catch {}
     setSavedUrl('');
     setDraftUrl('');
+    setCurrentEntityUrl('');
+    setMetadata({ title: 'Spotify', thumbnailUrl: '' });
+    setPlayback({ duration: 0, position: 0 });
     setReady(false);
     setPlaying(false);
     setError('');
@@ -226,6 +286,20 @@ const SpotifyGlobalPlayer = ({ userId }) => {
     setPlaying(true);
   };
 
+  const restartPlayback = () => {
+    if (!controllerRef.current || !ready || safetyReason) return;
+    controllerRef.current.restart();
+    pausedBySafetyRef.current = false;
+    setPlaying(true);
+  };
+
+  const seekPlayback = (event) => {
+    if (!controllerRef.current || !playback.duration) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (event.clientX - bounds.left) / Math.max(1, bounds.width)));
+    controllerRef.current.seek((playback.duration * ratio) / 1000);
+  };
+
   const status = safetyReason
     ? `Pausado: ${safetyReason}`
     : pausedBySafetyRef.current
@@ -237,43 +311,97 @@ const SpotifyGlobalPlayer = ({ userId }) => {
           : savedUrl
             ? 'Música de fundo'
             : 'Configurar música';
+  const playbackPercent = playback.duration > 0
+    ? Math.min(100, Math.max(0, (playback.position / playback.duration) * 100))
+    : 0;
 
   return (
     <div ref={rootRef} className="relative" data-spotify-global-player>
-      <div className="flex h-9 items-center gap-1 rounded-full border border-slate-200 bg-slate-50/90 p-1 pr-1.5 shadow-sm dark:border-slate-700 dark:bg-slate-900/80">
+      <div className={`flex h-10 max-w-[calc(100vw-112px)] items-center gap-1.5 rounded-xl border px-1.5 text-white shadow-sm transition-colors sm:w-60 xl:w-80 ${
+        safetyReason ? 'border-amber-400/50 bg-[#241f15]' : 'border-white/10 bg-[#171717]'
+      }`}>
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          className="relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-[#282828]"
+          title="Abrir o player do Spotify"
+          aria-expanded={open}
+        >
+          {metadata.thumbnailUrl ? (
+            <img src={metadata.thumbnailUrl} alt="" className="h-full w-full object-cover" />
+          ) : (
+            <Music2 size={16} className="text-[#1DB954]" />
+          )}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          className="hidden min-w-0 flex-1 text-left sm:block"
+          title={`${metadata.title} · ${status}`}
+          aria-expanded={open}
+        >
+          <span className="block truncate text-[9px] font-bold leading-tight text-white">{savedUrl ? metadata.title : 'Conectar Spotify'}</span>
+          <span className={`mt-0.5 block truncate text-[8px] leading-tight ${safetyReason ? 'text-amber-300' : 'text-white/45'}`}>{status}</span>
+          <span
+            role="progressbar"
+            aria-label="Progresso da música"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(playbackPercent)}
+            className="mt-1 block h-0.5 overflow-hidden rounded-full bg-white/15 xl:hidden"
+          >
+            <span className="block h-full rounded-full bg-[#1DB954] transition-[width] duration-300" style={{ width: `${playbackPercent}%` }} />
+          </span>
+        </button>
+
+        {savedUrl && playback.duration > 0 ? (
+          <button
+            type="button"
+            onClick={seekPlayback}
+            className="hidden w-16 shrink-0 text-left xl:block"
+            title="Clique para avançar ou voltar na música"
+          >
+            <span className="flex justify-between text-[7px] tabular-nums text-white/40">
+              <span>{formatPlaybackTime(playback.position)}</span>
+              <span>-{formatPlaybackTime(Math.max(0, playback.duration - playback.position))}</span>
+            </span>
+            <span className="mt-1 block h-0.5 overflow-hidden rounded-full bg-white/15">
+              <span className="block h-full rounded-full bg-white/80" style={{ width: `${playbackPercent}%` }} />
+            </span>
+          </button>
+        ) : null}
+
+        {savedUrl ? (
+          <button
+            type="button"
+            onClick={restartPlayback}
+            disabled={!ready || Boolean(safetyReason)}
+            className="hidden h-6 w-6 shrink-0 items-center justify-center rounded-full text-white/55 transition hover:bg-white/10 hover:text-white disabled:opacity-30 lg:flex"
+            title="Reiniciar música"
+            aria-label="Reiniciar música"
+          >
+            <RotateCcw size={11} />
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={savedUrl ? togglePlayback : () => setOpen(true)}
           disabled={Boolean(safetyReason) || (Boolean(savedUrl) && !ready)}
-          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-white transition ${
-            safetyReason ? 'bg-amber-500' : 'bg-[#1DB954] hover:bg-[#18a64a]'
-          } disabled:cursor-default`}
+          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-white shadow-sm transition ${safetyReason ? 'bg-amber-500' : 'bg-white text-black hover:scale-105'} disabled:cursor-default disabled:opacity-70`}
           title={safetyReason ? `Spotify pausado por ${safetyReason}` : !savedUrl ? 'Configurar Spotify' : playing ? 'Pausar Spotify' : 'Reproduzir Spotify'}
           aria-label={!savedUrl ? 'Configurar Spotify' : playing ? 'Pausar Spotify' : 'Reproduzir Spotify'}
         >
-          {safetyReason ? <AudioLines size={13} /> : playing ? <Pause size={13} fill="currentColor" /> : <Play size={13} fill="currentColor" />}
+          {safetyReason ? <AudioLines size={13} /> : playing ? <Pause size={13} fill="currentColor" /> : <Play size={13} fill="currentColor" className="translate-x-px" />}
         </button>
         <button
           type="button"
           onClick={() => setOpen((value) => !value)}
-          className="hidden min-w-0 items-center gap-1.5 pl-1 text-left sm:flex"
-          title="Abrir player global do Spotify"
-          aria-expanded={open}
-        >
-          <span className="min-w-0">
-            <span className="block text-[9px] font-bold leading-none text-slate-800 dark:text-slate-100">Spotify</span>
-            <span className={`mt-0.5 block max-w-32 truncate text-[8px] leading-none ${safetyReason ? 'text-amber-600 dark:text-amber-300' : 'text-slate-400'}`}>{status}</span>
-          </span>
-          <ChevronDown size={12} className={`shrink-0 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />
-        </button>
-        <button
-          type="button"
-          onClick={() => setOpen((value) => !value)}
-          className="flex h-7 w-6 items-center justify-center text-slate-400 sm:hidden"
+          className="flex h-6 w-4 shrink-0 items-center justify-center text-white/35 transition hover:text-white"
           title="Abrir player global do Spotify"
           aria-label="Abrir player global do Spotify"
         >
-          <Music2 size={13} />
+          <ChevronDown size={11} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
         </button>
       </div>
 

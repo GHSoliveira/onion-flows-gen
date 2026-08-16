@@ -32,7 +32,13 @@ test('player global pausa por chamada e áudio sem polling nem API Genesys extra
   assert.match(workspace, /callStateOf\(call\)\?\.stale === true \? 0 : 1/);
   assert.match(player, /document\.addEventListener\('play', markPlaying, true\)/);
   assert.match(player, /controllerRef\.current\.pause\(\)/);
+  assert.match(player, /https:\/\/open\.spotify\.com\/oembed\?url=/);
+  assert.match(player, /controllerRef\.current\.restart\(\)/);
+  assert.match(player, /controllerRef\.current\.seek\(/);
+  assert.match(player, /role="progressbar"/);
+  assert.match(player, /metadata\.thumbnailUrl/);
   assert.match(player, /A retomada é sempre manual/);
   assert.doesNotMatch(player, /setInterval|setTimeout/);
   assert.match(server, /frameSrc: \["'self'", "https:\/\/open\.spotify\.com"\]/);
+  assert.match(server, /connectSrc:\s*\[\s*"'self'",\s*"https:\/\/open\.spotify\.com"/);
 });

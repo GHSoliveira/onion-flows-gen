@@ -216,6 +216,7 @@ app.use(helmet({
       frameSrc: ["'self'", "https://open.spotify.com"],
       connectSrc: [
         "'self'",
+        "https://open.spotify.com",
         ...(NODE_ENV === 'development' ? [
           "http://localhost:3101",
           "ws://localhost:3101",
