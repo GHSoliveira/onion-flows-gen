@@ -17,10 +17,12 @@ import {
   User, MessageCircle, Clock, Play, XCircle, Send, Headset, Star, Check, CheckCheck,
   ArrowLeft, Paperclip, Info, MessageSquareText, Loader2, FileText, Image as ImageIcon, Video, AudioLines,
   PanelRightClose, PanelRightOpen, ArrowRightLeft, CornerUpLeft, X as XIcon, Settings, Pencil, Trash2,
-  PhoneCall, Copy, RefreshCw, BrainCircuit, Database, ClipboardList, Router, Activity, TriangleAlert, ArrowUpDown
+  PhoneCall, Copy, RefreshCw, BrainCircuit, Database, ClipboardList, Router, Activity, TriangleAlert, ArrowUpDown,
+  Youtube
 } from 'lucide-react';
 import OnionAiIcon from '../components/OnionAiIcon';
 import SpotifyAccountSettings from '../components/SpotifyAccountSettings';
+import YouTubeSidePanel from '../components/YouTubeSidePanel';
 import toast from 'react-hot-toast';
 import { CenterSkeleton } from '../components/LoadingSkeleton';
 import { sortChatsForMode } from '../utils/chatSorting';
@@ -801,6 +803,7 @@ const AgentWorkspace = () => {
   const [mobilePanelTab, setMobilePanelTab] = useState('info');
   const [isSidePanelCollapsed, setIsSidePanelCollapsed] = useState(true);
   const [isAiPanelOpen, setIsAiPanelOpen] = useState(false);
+  const [isYoutubePanelOpen, setIsYoutubePanelOpen] = useState(false);
   const [aiSuggestion, setAiSuggestion] = useState(null);
   const [aiSuggestedReply, setAiSuggestedReply] = useState('');
   const [aiAgentGuidance, setAiAgentGuidance] = useState('');
@@ -5637,6 +5640,16 @@ const AgentWorkspace = () => {
                       ) : null}
                       <button
                         type="button"
+                        onClick={() => setIsYoutubePanelOpen((open) => !open)}
+                        className={`${HEADER_ICON_BUTTON_CLASS} ${isYoutubePanelOpen ? 'text-red-600 dark:text-red-300' : 'text-slate-500 hover:text-red-600 dark:text-slate-300 dark:hover:text-red-300'}`}
+                        title={isYoutubePanelOpen ? 'Fechar player do YouTube' : 'Abrir player do YouTube'}
+                        aria-label={isYoutubePanelOpen ? 'Fechar player do YouTube' : 'Abrir player do YouTube'}
+                        aria-expanded={isYoutubePanelOpen}
+                      >
+                        <Youtube size={16} />
+                      </button>
+                      <button
+                        type="button"
                         onClick={openTransferModal}
                         className={`${HEADER_ICON_BUTTON_CLASS} text-blue-600 hover:text-blue-700 dark:text-blue-300`}
                         title="Transferir atendimento"
@@ -6159,6 +6172,20 @@ const AgentWorkspace = () => {
         ) : null}
         {mediaModal.open ? <div className="ui-overlay-fade fixed inset-0 z-50 flex items-end justify-center bg-slate-950/70 p-4 backdrop-blur-sm lg:items-center" onClick={() => !mediaModal.uploading && closeMediaModal()}><div className="ui-responsive-modal w-full max-w-xl overflow-hidden rounded-[28px] bg-white shadow-2xl dark:bg-slate-900" onClick={(e) => e.stopPropagation()}><div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800"><div className="flex items-center justify-between gap-3"><div><div className="text-lg font-semibold text-slate-900 dark:text-white">Enviar anexo</div><div className="text-sm text-slate-500 dark:text-slate-400">Confira o preview antes de enviar.</div></div><button type="button" onClick={closeMediaModal} disabled={mediaModal.uploading} className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-600 disabled:opacity-50 dark:bg-slate-800 dark:text-slate-200"><XCircle size={18} /></button></div></div><div className="space-y-4 p-5"><div className="overflow-hidden rounded-[24px] border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800">{mediaModal.previewKind === 'image' ? <img src={mediaModal.previewUrl} alt={mediaModal.file?.name || 'Preview'} className="max-h-[360px] w-full object-contain bg-black/5" /> : mediaModal.previewKind === 'video' ? <video controls className="max-h-[360px] w-full bg-black" src={mediaModal.previewUrl} /> : mediaModal.previewKind === 'audio' ? <div className="space-y-4 p-5"><div className="flex items-center gap-3 text-slate-700 dark:text-slate-200"><div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-300"><AudioLines size={22} /></div><div><div className="font-semibold">Audio</div><div className="text-sm text-slate-500 dark:text-slate-400">{mediaModal.file?.name}</div></div></div><audio controls className="w-full" src={mediaModal.previewUrl} /></div> : <div className="flex items-center gap-4 p-5"><div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-200">{mediaModal.previewKind === 'image' ? <ImageIcon size={24} /> : mediaModal.previewKind === 'video' ? <Video size={24} /> : <FileText size={24} />}</div><div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold text-slate-900 dark:text-white">{mediaModal.file?.name || 'Arquivo'}</div><div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{formatFileSize(mediaModal.file?.size || 0)}</div></div></div>}</div><div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm dark:border-slate-700 dark:bg-slate-800"><div className="font-semibold text-slate-800 dark:text-slate-100">{mediaModal.file?.name || 'Arquivo'}</div><div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{mediaModal.file?.type || 'application/octet-stream'} • {formatFileSize(mediaModal.file?.size || 0)}</div></div><div><label className="mb-2 block text-sm font-semibold text-slate-800 dark:text-slate-100">Legenda opcional</label><textarea rows={3} value={mediaModal.caption} onChange={(e) => setMediaModal((prev) => ({ ...prev, caption: e.target.value }))} placeholder="Escreva uma legenda, se quiser..." className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></div><div className="flex gap-3"><button type="button" onClick={closeMediaModal} disabled={mediaModal.uploading} className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Cancelar</button><button type="button" onClick={handleSendMedia} disabled={mediaModal.uploading} className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">{mediaModal.uploading ? <Loader2 size={16} className="animate-spin" /> : <Send size={14} />}{mediaModal.uploading ? 'Enviando...' : 'Enviar arquivo'}</button></div></div></div></div> : null}
       </main>
+      ) : null}
+      {!isMobileView ? (
+        <div className={`hidden shrink-0 overflow-hidden transition-[width,opacity] duration-300 ease-out lg:block ${isYoutubePanelOpen ? 'w-[300px] opacity-100 xl:w-[340px]' : 'w-0 opacity-0'}`}>
+          <aside className="h-full w-[300px] border-l border-red-100 bg-white dark:border-red-950/60 dark:bg-slate-900 xl:w-[340px]">
+            <YouTubeSidePanel userId={user?.id} open={isYoutubePanelOpen} onClose={() => setIsYoutubePanelOpen(false)} />
+          </aside>
+        </div>
+      ) : null}
+      {isMobileView && isYoutubePanelOpen ? (
+        <div className="ui-overlay-fade fixed inset-0 z-[80] bg-slate-950/60" onClick={() => setIsYoutubePanelOpen(false)}>
+          <div className="ui-sheet-surface absolute inset-x-0 bottom-0 h-[82vh] overflow-hidden rounded-t-[28px] bg-white shadow-2xl dark:bg-slate-900" onClick={(event) => event.stopPropagation()}>
+            <YouTubeSidePanel userId={user?.id} open={isYoutubePanelOpen} onClose={() => setIsYoutubePanelOpen(false)} />
+          </div>
+        </div>
       ) : null}
     </div>
   );
