@@ -2,6 +2,17 @@ import { useEffect, useState } from 'react';
 import { Loader2, Music2 } from 'lucide-react';
 import { completeSpotifyAuthorization } from '../services/spotifyAuth';
 
+const describeCallbackError = (error) => {
+  const message = String(error?.message || 'spotify_callback_falhou');
+  if (message.startsWith('spotify_profile_403_allowlist')) {
+    return 'O Spotify emitiu o token, mas bloqueou esta conta no perfil. Confirme se o e-mail desta conta está em User Management no app de Client ID c9f477…cceab e conecte novamente com essa mesma conta.';
+  }
+  if (message.startsWith('spotify_profile_401')) {
+    return 'O Spotify recusou o token ao consultar o perfil. Volte ao Onion e conecte a conta novamente.';
+  }
+  return message;
+};
+
 const SpotifyCallback = () => {
   const [error, setError] = useState('');
 
@@ -12,7 +23,7 @@ const SpotifyCallback = () => {
         if (active) window.location.replace(`${returnTo}?spotify=connected`);
       })
       .catch((callbackError) => {
-        if (active) setError(String(callbackError?.message || 'spotify_callback_falhou'));
+        if (active) setError(describeCallbackError(callbackError));
       });
     return () => { active = false; };
   }, []);

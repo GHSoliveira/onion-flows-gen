@@ -87,8 +87,14 @@ const fetchProfile = async (accessToken) => {
     headers: { Authorization: `Bearer ${accessToken}` },
     credentials: 'omit',
   });
-  if (!response.ok) throw new Error(`spotify_profile_${response.status}`);
-  const profile = await response.json();
+  const profile = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = String(profile?.error?.message || profile?.message || '').trim();
+    if (response.status === 403) {
+      throw new Error(`spotify_profile_403_allowlist${detail ? `:${detail}` : ''}`);
+    }
+    throw new Error(`spotify_profile_${response.status}${detail ? `:${detail}` : ''}`);
+  }
   return {
     id: String(profile?.id || ''),
     name: String(profile?.display_name || profile?.id || 'Spotify'),
