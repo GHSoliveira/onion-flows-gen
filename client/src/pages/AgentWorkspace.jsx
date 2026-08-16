@@ -20,6 +20,7 @@ import {
   PhoneCall, Copy, RefreshCw, BrainCircuit, Database, ClipboardList, Router, Activity, TriangleAlert, ArrowUpDown
 } from 'lucide-react';
 import OnionAiIcon from '../components/OnionAiIcon';
+import SpotifyAccountSettings from '../components/SpotifyAccountSettings';
 import toast from 'react-hot-toast';
 import { CenterSkeleton } from '../components/LoadingSkeleton';
 import { sortChatsForMode } from '../utils/chatSorting';
@@ -5812,6 +5813,8 @@ const AgentWorkspace = () => {
                       />
                       <span className="mt-1 block text-[9px] text-slate-400">Opcional. Se ficar vazio, {'{agente.nome}'} será bloqueada antes do envio.</span>
                     </label>
+
+                    <SpotifyAccountSettings />
 
                     <section className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50/70 dark:border-slate-700 dark:bg-slate-800/45">
                       <div className="flex items-center justify-between gap-4 px-3.5 py-3">

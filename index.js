@@ -206,19 +206,27 @@ app.use(compression());
 // styleSrc continua aceitando 'unsafe-inline' porque React + react-flow usam
 // `style={{}}` inline em massa (posicionamento de nodes, transforms, handles).
 // Refatorar para CSS classes não é viável sem trocar a lib do editor de fluxo.
-// Scripts da aplicação continuam restritos a `self`. O controller do Spotify,
-// que depende de `unsafe-eval`, roda apenas em um iframe sandboxed com CSP próprio.
+// Scripts da aplicação continuam restritos a `self` e ao SDK oficial do Spotify.
+// O controller legado, que depende de `unsafe-eval`, roda apenas em iframe sandboxed.
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'"],
+      scriptSrc: ["'self'", "https://sdk.scdn.co"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:", "https:"],
       frameSrc: ["'self'"],
+      mediaSrc: ["'self'", "blob:", "https://*.scdn.co", "https://*.spotifycdn.com"],
+      workerSrc: ["'self'", "blob:"],
       connectSrc: [
         "'self'",
         "https://open.spotify.com",
+        "https://accounts.spotify.com",
+        "https://api.spotify.com",
+        "https://*.spotify.com",
+        "wss://*.spotify.com",
+        "https://*.scdn.co",
+        "https://*.spotifycdn.com",
         ...(NODE_ENV === 'development' ? [
           "http://localhost:3101",
           "ws://localhost:3101",

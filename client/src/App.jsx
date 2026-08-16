@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import OnionBrandIcon from './components/OnionBrandIcon';
 import SpotifyGlobalPlayer from './components/SpotifyGlobalPlayer';
+import SpotifyCallback from './pages/SpotifyCallback';
 
 
 const FlowList = lazy(() => import('./pages/FlowList'));
@@ -368,6 +369,10 @@ const AppContent = () => {
       clearInterval(interval);
     };
   }, [user, tenant]);
+
+  if (normalizePathname(location.pathname) === '/spotify/callback') {
+    return <SpotifyCallback />;
+  }
 
   if (!user) {
     return (

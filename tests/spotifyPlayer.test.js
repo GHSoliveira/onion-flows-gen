@@ -51,7 +51,7 @@ test('player global pausa por chamada e áudio sem polling nem API Genesys extra
   assert.match(bridge, /controller\.togglePlay\(\)/);
   assert.match(bridge, /controller\.restart\(\)/);
   assert.match(bridge, /controller\.seek\(/);
-  assert.match(server, /scriptSrc: \["'self'"\]/);
+  assert.match(server, /scriptSrc: \["'self'", "https:\/\/sdk\.scdn\.co"\]/);
   assert.match(server, /app\.get\('\/spotify-embed-bridge\.html'/);
   assert.match(server, /script-src 'nonce-\$\{nonce\}' 'unsafe-eval' https:\/\/open\.spotify\.com https:\/\/embed-cdn\.spotifycdn\.com/);
   assert.match(server, /randomBytes\(18\)/);
