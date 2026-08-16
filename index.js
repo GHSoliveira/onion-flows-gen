@@ -210,7 +210,7 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "https://open.spotify.com"],
+      scriptSrc: ["'self'", "https://open.spotify.com", "https://embed-cdn.spotifycdn.com"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:", "https:"],
       frameSrc: ["'self'", "https://open.spotify.com"],
