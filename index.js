@@ -215,7 +215,7 @@ app.use(helmet({
       scriptSrc: ["'self'", "https://sdk.scdn.co"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:", "https:"],
-      frameSrc: ["'self'"],
+      frameSrc: ["'self'", "https://sdk.scdn.co"],
       mediaSrc: ["'self'", "blob:", "https://*.scdn.co", "https://*.spotifycdn.com"],
       workerSrc: ["'self'", "blob:"],
       connectSrc: [

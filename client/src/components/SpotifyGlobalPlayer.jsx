@@ -469,7 +469,7 @@ const readSpotifyVolume = (userId) => {
   }
 };
 
-const SpotifyPremiumPlayer = ({ userId }) => {
+const SpotifyPremiumPlayer = ({ userId, profile }) => {
   const safety = useSyncExternalStore(subscribePlaybackSafety, getPlaybackSafetySnapshot, getPlaybackSafetySnapshot);
   const localAudioCount = useLocalAudioActivity();
   const rootRef = useRef(null);
@@ -479,8 +479,10 @@ const SpotifyPremiumPlayer = ({ userId }) => {
   const [draftUrl, setDraftUrl] = useState(() => readSavedUrl(userId));
   const [actionError, setActionError] = useState('');
   const [fallbackMetadata, setFallbackMetadata] = useState({ title: 'Spotify Premium', thumbnailUrl: '' });
+  const accountProduct = String(profile?.product || '').toLowerCase();
+  const accountNeedsPremium = Boolean(accountProduct && accountProduct !== 'premium');
   const spotify = useSpotifyWebPlayback({
-    connected: true,
+    connected: !accountNeedsPremium,
     contentUrl: savedUrl,
     initialVolume: readSpotifyVolume(userId),
   });
@@ -568,10 +570,22 @@ const SpotifyPremiumPlayer = ({ userId }) => {
     runAction(() => spotify.seek((playback.duration * ratio) / 1000));
   };
 
+  const connectionStage = {
+    'validating-token': 'validando sessão',
+    'loading-sdk': 'carregando SDK',
+    connecting: 'abrindo conexão',
+    'waiting-ready': 'aguardando dispositivo',
+    retrying: 'reiniciando conexão',
+  }[spotify.phase] || '';
+  const visibleError = accountNeedsPremium
+    ? 'A conta conectada não possui Spotify Premium.'
+    : actionError || spotify.error;
   const status = safetyReason
     ? `Pausado: ${safetyReason}`
+    : visibleError
+      ? 'Spotify precisa de atenção'
     : spotify.loading
-      ? 'Conectando ao Spotify…'
+      ? `Conectando ao Spotify${connectionStage ? ` · ${connectionStage}` : ''}…`
       : spotify.playing
         ? 'Tocando completo'
         : spotify.ready
@@ -622,7 +636,14 @@ const SpotifyPremiumPlayer = ({ userId }) => {
           <button type="button" onClick={saveContent} className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#1DB954] text-white transition hover:bg-[#18a64a]" title="Salvar conteúdo" aria-label="Salvar conteúdo do Spotify"><Save size={13} /></button>
           {savedUrl ? <button type="button" onClick={clearContent} className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/30" title="Remover música" aria-label="Remover música do Spotify"><Trash2 size={13} /></button> : null}
         </div>
-        {spotify.error || actionError ? <div className="mt-1.5 text-[9px] font-medium text-red-500">{actionError || spotify.error}</div> : null}
+        {visibleError ? (
+          <div className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-red-200 bg-red-50 px-2.5 py-2 dark:border-red-900/60 dark:bg-red-950/25">
+            <div className="min-w-0 text-[9px] font-medium leading-3 text-red-600 dark:text-red-300">{visibleError}</div>
+            {!accountNeedsPremium ? (
+              <button type="button" onClick={spotify.retry} className="shrink-0 rounded-md bg-white px-2 py-1 text-[9px] font-bold text-red-600 shadow-sm transition hover:bg-red-100 dark:bg-red-950/70 dark:text-red-200 dark:hover:bg-red-900/70">Tentar novamente</button>
+            ) : null}
+          </div>
+        ) : null}
         <div className="mt-2 text-[8px] leading-3 text-slate-400">Reprodução completa pelo dispositivo Onion Flows. Ligações e áudios pausam a música; a retomada é manual.</div>
       </div>
     </div>
@@ -631,7 +652,7 @@ const SpotifyPremiumPlayer = ({ userId }) => {
 
 const SpotifyGlobalPlayer = ({ userId }) => {
   const auth = useSyncExternalStore(subscribeSpotifyAuth, getSpotifyAuthSnapshot, getSpotifyAuthSnapshot);
-  return auth.connected ? <SpotifyPremiumPlayer userId={userId} /> : <SpotifyPreviewPlayer userId={userId} />;
+  return auth.connected ? <SpotifyPremiumPlayer userId={userId} profile={auth.profile} /> : <SpotifyPreviewPlayer userId={userId} />;
 };
 
 export default SpotifyGlobalPlayer;

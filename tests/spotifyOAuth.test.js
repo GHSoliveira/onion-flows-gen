@@ -26,9 +26,14 @@ test('player Premium tem pausa, volume real e segurança por ligação', () => {
   assert.match(playback, /new Spotify\.Player/);
   assert.match(playback, /playerRef\.current\.setVolume/);
   assert.match(playback, /playerRef\.current\.pause/);
+  assert.match(playback, /DEVICE_READY_TIMEOUT_MS = 18_000/);
+  assert.match(playback, /setLoading\(false\)/);
+  assert.match(playback, /const retry = useCallback/);
   assert.match(playback, /spotifyApiRequest\(`\/me\/player\/play\?device_id=/);
   assert.match(player, /data-spotify-premium-player/);
   assert.match(player, /aria-label="Volume do Spotify"/);
+  assert.match(player, /Spotify precisa de atenção/);
+  assert.match(player, /Tentar novamente/);
   assert.match(player, /spotify\.pause\(\)\.catch/);
   assert.match(settings, /startSpotifyAuthorization\('\/agent'\)/);
 });
@@ -38,6 +43,7 @@ test('CSP libera apenas superfícies oficiais necessárias ao player Premium', (
   assert.match(server, /https:\/\/sdk\.scdn\.co/);
   assert.match(server, /https:\/\/accounts\.spotify\.com/);
   assert.match(server, /https:\/\/api\.spotify\.com/);
+  assert.match(server, /frameSrc: \["'self'", "https:\/\/sdk\.scdn\.co"\]/);
   assert.match(server, /wss:\/\/\*\.spotify\.com/);
   assert.match(server, /mediaSrc: \["'self'", "blob:"/);
 });

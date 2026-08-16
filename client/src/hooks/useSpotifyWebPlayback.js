@@ -51,6 +51,7 @@ const desiredUriForUrl = (value) => {
 
 const emptyPlayback = { duration: 0, position: 0 };
 const emptyMetadata = { title: 'Spotify', artist: '', thumbnailUrl: '', uri: '', contextUri: '' };
+const DEVICE_READY_TIMEOUT_MS = 18_000;
 
 export const useSpotifyWebPlayback = ({ connected, contentUrl, initialVolume = 0.55 }) => {
   const playerRef = useRef(null);
@@ -62,6 +63,8 @@ export const useSpotifyWebPlayback = ({ connected, contentUrl, initialVolume = 0
   const [playing, setPlaying] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [phase, setPhase] = useState('idle');
+  const [connectionGeneration, setConnectionGeneration] = useState(0);
   const [deviceId, setDeviceId] = useState('');
   const [metadata, setMetadata] = useState(emptyMetadata);
   const [playback, setPlayback] = useState(emptyPlayback);
@@ -103,6 +106,8 @@ export const useSpotifyWebPlayback = ({ connected, contentUrl, initialVolume = 0
       setDeviceId('');
       setPlaying(false);
       setLoading(false);
+      setError('');
+      setPhase('idle');
       setMetadata(emptyMetadata);
       setPlayback(emptyPlayback);
       return undefined;
@@ -110,27 +115,57 @@ export const useSpotifyWebPlayback = ({ connected, contentUrl, initialVolume = 0
 
     let disposed = false;
     let player = null;
+    let readyTimeout = null;
+
+    const clearReadyTimeout = () => {
+      if (readyTimeout) window.clearTimeout(readyTimeout);
+      readyTimeout = null;
+    };
+
+    const failConnection = (message, nextPhase = 'error') => {
+      if (disposed) return;
+      clearReadyTimeout();
+      deviceIdRef.current = '';
+      activatedRef.current = false;
+      setDeviceId('');
+      setReady(false);
+      setLoading(false);
+      setPhase(nextPhase);
+      setError(message);
+    };
+
     setLoading(true);
     setError('');
+    setPhase('validating-token');
 
-    loadSpotifySdk().then((Spotify) => {
-      if (disposed) return;
+    getSpotifyAccessToken().then(() => {
+      if (disposed) return null;
+      setPhase('loading-sdk');
+      return loadSpotifySdk();
+    }).then((Spotify) => {
+      if (!Spotify || disposed) return;
+      setPhase('connecting');
       player = new Spotify.Player({
         name: 'Onion Flows',
         volume,
         getOAuthToken: (callback) => {
           getSpotifyAccessToken()
             .then(callback)
-            .catch(() => setError('Sua sessão do Spotify expirou. Conecte novamente.'));
+            .catch(() => {
+              callback('');
+              failConnection('Sua sessão do Spotify expirou. Desconecte e conecte a conta novamente.', 'authentication-error');
+            });
         },
       });
       playerRef.current = player;
       player.addListener('ready', ({ device_id: nextDeviceId }) => {
         if (disposed) return;
+        clearReadyTimeout();
         deviceIdRef.current = String(nextDeviceId || '');
         setDeviceId(String(nextDeviceId || ''));
         setReady(Boolean(nextDeviceId));
         setLoading(false);
+        setPhase('ready');
         setError('');
         player.getCurrentState().then(applyState).catch(() => {});
       });
@@ -138,39 +173,60 @@ export const useSpotifyWebPlayback = ({ connected, contentUrl, initialVolume = 0
         if (disposed || String(unavailableDeviceId || '') !== deviceIdRef.current) return;
         setReady(false);
         setLoading(false);
+        setPhase('not-ready');
         setError('O dispositivo Spotify do Onion ficou indisponível.');
       });
       player.addListener('player_state_changed', (state) => {
         if (!disposed) applyState(state);
       });
-      player.addListener('initialization_error', ({ message }) => setError(message || 'Falha ao iniciar o Spotify.'));
-      player.addListener('authentication_error', ({ message }) => setError(message || 'Falha na autenticação do Spotify.'));
-      player.addListener('account_error', () => setError('Esta conta precisa ser Spotify Premium.'));
-      player.addListener('playback_error', ({ message }) => setError(message || 'Falha ao reproduzir no Spotify.'));
+      player.addListener('initialization_error', ({ message }) => {
+        const detail = String(message || '').trim();
+        failConnection(`O navegador bloqueou o player protegido do Spotify${detail ? `: ${detail}` : '. Ative conteúdo protegido/Widevine e tente novamente.'}`, 'initialization-error');
+      });
+      player.addListener('authentication_error', ({ message }) => {
+        const detail = String(message || '').trim();
+        failConnection(`O Spotify recusou a autenticação${detail ? `: ${detail}` : '. Conecte a conta novamente.'}`, 'authentication-error');
+      });
+      player.addListener('account_error', () => {
+        failConnection('Esta conta precisa ter Spotify Premium ativo.', 'account-error');
+      });
+      player.addListener('playback_error', ({ message }) => {
+        if (disposed) return;
+        setLoading(false);
+        setError(message || 'Falha ao reproduzir no Spotify.');
+      });
+      readyTimeout = window.setTimeout(() => {
+        failConnection('O Spotify não liberou o dispositivo em 18 segundos. No Brave, permita conteúdo protegido (Widevine) e desative o Shields para 127.0.0.1.', 'ready-timeout');
+      }, DEVICE_READY_TIMEOUT_MS);
       player.connect().then((success) => {
         if (!success && !disposed) {
-          setLoading(false);
-          setError('O Spotify não conseguiu criar o dispositivo Onion Flows.');
+          failConnection('O Spotify não conseguiu criar o dispositivo Onion Flows.', 'connect-rejected');
+        } else if (!disposed && !deviceIdRef.current) {
+          setPhase('waiting-ready');
         }
       }).catch(() => {
-        if (!disposed) {
-          setLoading(false);
-          setError('Não foi possível conectar o player completo do Spotify.');
-        }
+        failConnection('Não foi possível conectar o player completo do Spotify.', 'connect-error');
       });
-    }).catch(() => {
-      if (!disposed) {
-        setLoading(false);
-        setError('Não foi possível carregar o player completo do Spotify.');
+    }).catch((connectionError) => {
+      const message = String(connectionError?.message || '');
+      if (/spotify_nao_conectado|invalid_grant|spotify_token_/.test(message)) {
+        failConnection('Sua sessão do Spotify não é mais válida. Desconecte e conecte a conta novamente.', 'authentication-error');
+      } else if (message === 'spotify_sdk_timeout') {
+        failConnection('A SDK do Spotify não carregou em 20 segundos. Verifique o Shields, bloqueadores e a rede.', 'sdk-timeout');
+      } else if (message === 'spotify_sdk_bloqueado') {
+        failConnection('O navegador ou um bloqueador impediu o carregamento da SDK do Spotify.', 'sdk-blocked');
+      } else {
+        failConnection('Não foi possível carregar o player completo do Spotify.', 'sdk-error');
       }
     });
 
     return () => {
       disposed = true;
+      clearReadyTimeout();
       player?.disconnect?.();
       if (playerRef.current === player) playerRef.current = null;
     };
-  }, [applyState, connected]);
+  }, [applyState, connected, connectionGeneration]);
 
   useEffect(() => {
     if (!playing) return undefined;
@@ -245,11 +301,26 @@ export const useSpotifyWebPlayback = ({ connected, contentUrl, initialVolume = 0
     if (playerRef.current && ready) await playerRef.current.setVolume(normalized);
   }, [ready]);
 
+  const retry = useCallback(() => {
+    playerRef.current?.disconnect?.();
+    playerRef.current = null;
+    deviceIdRef.current = '';
+    activatedRef.current = false;
+    setDeviceId('');
+    setReady(false);
+    setPlaying(false);
+    setLoading(true);
+    setError('');
+    setPhase('retrying');
+    setConnectionGeneration((value) => value + 1);
+  }, []);
+
   return {
     ready,
     playing,
     loading,
     error,
+    phase,
     deviceId,
     metadata,
     playback,
@@ -259,5 +330,6 @@ export const useSpotifyWebPlayback = ({ connected, contentUrl, initialVolume = 0
     restart,
     seek,
     setVolume,
+    retry,
   };
 };
