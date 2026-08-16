@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { AudioLines, ChevronDown, ExternalLink, Music2, Pause, Play, RotateCcw, Save, SkipBack, SkipForward, Trash2, Volume2, VolumeX } from 'lucide-react';
+import { AudioLines, ChevronDown, ChevronLeft, ChevronRight, Disc3, ExternalLink, Library, Loader2, Music2, Pause, Play, RotateCcw, Save, SkipBack, SkipForward, Trash2, Volume2, VolumeX } from 'lucide-react';
 import {
   getPlaybackSafetySnapshot,
   subscribePlaybackSafety,
 } from '../services/playbackSafety';
 import { normalizeSpotifyContentUrl } from '../utils/spotifyPlayer';
 import SpotifyAccountSettings from './SpotifyAccountSettings';
-import { getSpotifyAuthSnapshot, spotifyApiRequest, subscribeSpotifyAuth } from '../services/spotifyAuth';
+import { getSpotifyAuthSnapshot, spotifyApiRequest, startSpotifyAuthorization, subscribeSpotifyAuth } from '../services/spotifyAuth';
 import { useSpotifyWebPlayback } from '../hooks/useSpotifyWebPlayback';
 
 const SPOTIFY_BRIDGE_PATH = '/spotify-embed-bridge.html';
@@ -14,6 +14,7 @@ const SPOTIFY_BRIDGE_COMMAND = 'onion:spotify:bridge:command';
 const SPOTIFY_BRIDGE_EVENT = 'onion:spotify:bridge:event';
 const spotifyMetadataCache = new Map();
 const spotifyAlbumTracksCache = new Map();
+const SAVED_ALBUMS_PAGE_SIZE = 12;
 
 const formatPlaybackTime = (milliseconds) => {
   const seconds = Math.max(0, Math.floor((Number(milliseconds) || 0) / 1000));
@@ -65,6 +66,36 @@ const loadSpotifyAlbumTracks = async (url) => {
       throw error;
     });
   spotifyAlbumTracksCache.set(normalized, request);
+  return request;
+};
+
+const loadSpotifySavedAlbums = async (cache, offset = 0) => {
+  const safeOffset = Math.max(0, Number(offset) || 0);
+  const cacheKey = `${safeOffset}:${SAVED_ALBUMS_PAGE_SIZE}`;
+  if (cache.has(cacheKey)) return cache.get(cacheKey);
+  const request = spotifyApiRequest(`/me/albums?limit=${SAVED_ALBUMS_PAGE_SIZE}&offset=${safeOffset}`)
+    .then((response) => response.json())
+    .then((payload) => ({
+      total: Math.max(0, Number(payload?.total) || 0),
+      offset: Math.max(0, Number(payload?.offset) || safeOffset),
+      albums: (Array.isArray(payload?.items) ? payload.items : [])
+        .map((item) => item?.album)
+        .filter((album) => album?.id)
+        .map((album) => ({
+          id: String(album.id),
+          uri: String(album.uri || `spotify:album:${album.id}`),
+          url: String(album?.external_urls?.spotify || `https://open.spotify.com/album/${album.id}`),
+          name: String(album.name || 'Álbum'),
+          artist: Array.isArray(album.artists) ? album.artists.map((artist) => artist?.name).filter(Boolean).join(', ') : '',
+          image: String(album?.images?.[1]?.url || album?.images?.[0]?.url || ''),
+          year: String(album?.release_date || '').slice(0, 4),
+        })),
+    }))
+    .catch((error) => {
+      cache.delete(cacheKey);
+      throw error;
+    });
+  cache.set(cacheKey, request);
   return request;
 };
 
@@ -499,11 +530,13 @@ const readSpotifyVolume = (userId) => {
   }
 };
 
-const SpotifyPremiumPlayer = ({ userId, profile }) => {
+const SpotifyPremiumPlayer = ({ userId, profile, authorizedScopes = '' }) => {
   const safety = useSyncExternalStore(subscribePlaybackSafety, getPlaybackSafetySnapshot, getPlaybackSafetySnapshot);
   const localAudioCount = useLocalAudioActivity();
   const rootRef = useRef(null);
   const pausedBySafetyRef = useRef(false);
+  const pendingAlbumPlaybackRef = useRef(false);
+  const libraryPageCacheRef = useRef(new Map());
   const [open, setOpen] = useState(false);
   const [savedUrl, setSavedUrl] = useState(() => readSavedUrl(userId));
   const [draftUrl, setDraftUrl] = useState(() => readSavedUrl(userId));
@@ -511,6 +544,14 @@ const SpotifyPremiumPlayer = ({ userId, profile }) => {
   const [fallbackMetadata, setFallbackMetadata] = useState({ title: 'Spotify Premium', thumbnailUrl: '' });
   const [albumTracks, setAlbumTracks] = useState([]);
   const [albumTracksLoading, setAlbumTracksLoading] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [libraryOffset, setLibraryOffset] = useState(0);
+  const [libraryAlbums, setLibraryAlbums] = useState([]);
+  const [libraryTotal, setLibraryTotal] = useState(0);
+  const [libraryLoading, setLibraryLoading] = useState(false);
+  const [libraryError, setLibraryError] = useState('');
+  const [libraryAuthBusy, setLibraryAuthBusy] = useState(false);
+  const libraryScopeGranted = String(authorizedScopes).split(/\s+/).includes('user-library-read');
   const accountProduct = String(profile?.product || '').toLowerCase();
   const accountNeedsPremium = Boolean(accountProduct && accountProduct !== 'premium');
   const spotify = useSpotifyWebPlayback({
@@ -550,6 +591,36 @@ const SpotifyPremiumPlayer = ({ userId, profile }) => {
       .catch(() => {});
     return () => controller.abort();
   }, [savedUrl]);
+
+  useEffect(() => {
+    if (!libraryOpen || !libraryScopeGranted) return undefined;
+    let disposed = false;
+    setLibraryLoading(true);
+    setLibraryError('');
+    loadSpotifySavedAlbums(libraryPageCacheRef.current, libraryOffset)
+      .then((result) => {
+        if (disposed) return;
+        setLibraryAlbums(result.albums);
+        setLibraryTotal(result.total);
+      })
+      .catch((error) => {
+        if (disposed) return;
+        const message = String(error?.message || '');
+        setLibraryError(/scope|permission|403/i.test(message)
+          ? 'Permissão da biblioteca ausente. Reconecte o Spotify uma vez.'
+          : 'Não foi possível carregar seus álbuns agora.');
+      })
+      .finally(() => {
+        if (!disposed) setLibraryLoading(false);
+      });
+    return () => { disposed = true; };
+  }, [libraryOffset, libraryOpen, libraryScopeGranted]);
+
+  useEffect(() => {
+    if (!pendingAlbumPlaybackRef.current || !spotify.ready) return;
+    pendingAlbumPlaybackRef.current = false;
+    spotify.play().catch((error) => setActionError(String(error?.message || 'O Spotify não confirmou o álbum.')));
+  }, [savedUrl, spotify.play, spotify.ready]);
 
   useEffect(() => {
     const normalized = normalizeSpotifyContentUrl(savedUrl);
@@ -604,6 +675,31 @@ const SpotifyPremiumPlayer = ({ userId, profile }) => {
     setDraftUrl(normalized);
     setSavedUrl(normalized);
     setActionError('');
+  };
+
+  const selectLibraryAlbum = (album) => {
+    const normalized = normalizeSpotifyContentUrl(album?.url);
+    if (!normalized) return;
+    if (normalized === savedUrl) {
+      runAction(spotify.play);
+      return;
+    }
+    try { localStorage.setItem(spotifyStorageKey(userId), normalized); } catch {}
+    pendingAlbumPlaybackRef.current = true;
+    setDraftUrl(normalized);
+    setSavedUrl(normalized);
+    setActionError('');
+  };
+
+  const authorizeLibrary = async () => {
+    setLibraryAuthBusy(true);
+    setLibraryError('');
+    try {
+      await startSpotifyAuthorization('/agent');
+    } catch {
+      setLibraryAuthBusy(false);
+      setLibraryError('Não foi possível abrir a autorização do Spotify.');
+    }
   };
 
   const clearContent = () => {
@@ -684,6 +780,58 @@ const SpotifyPremiumPlayer = ({ userId, profile }) => {
 
         <SpotifyAccountSettings compact />
 
+        <div className="mt-2 overflow-hidden rounded-xl border border-slate-200 bg-slate-50/80 dark:border-slate-700 dark:bg-slate-800/55" data-spotify-library>
+          <button type="button" onClick={() => setLibraryOpen((value) => !value)} className="flex w-full items-center gap-2 px-2.5 py-2 text-left transition hover:bg-slate-100 dark:hover:bg-slate-800" aria-expanded={libraryOpen}>
+            <Library size={13} className="text-[#1DB954]" />
+            <span className="min-w-0 flex-1">
+              <span className="block text-[9px] font-bold text-slate-800 dark:text-slate-100">Meus álbuns</span>
+              <span className="block text-[8px] text-slate-400">Navegar pela biblioteca salva</span>
+            </span>
+            <ChevronDown size={12} className={`text-slate-400 transition-transform ${libraryOpen ? 'rotate-180' : ''}`} />
+          </button>
+          {libraryOpen ? (
+            <div className="border-t border-slate-200 p-2 dark:border-slate-700">
+              {!libraryScopeGranted ? (
+                <div className="rounded-lg bg-white p-2 text-center dark:bg-slate-900/60">
+                  <p className="text-[8px] leading-3 text-slate-500 dark:text-slate-300">Autorize somente a leitura dos seus álbuns salvos. Sua sessão e o player continuam locais.</p>
+                  <button type="button" onClick={authorizeLibrary} disabled={libraryAuthBusy} className="mt-2 inline-flex h-7 items-center gap-1.5 rounded-lg bg-[#1DB954] px-2.5 text-[8px] font-bold text-white transition hover:bg-[#18a64a] disabled:opacity-50">
+                    {libraryAuthBusy ? <Loader2 size={10} className="animate-spin" /> : <Library size={10} />}
+                    {libraryAuthBusy ? 'Abrindo...' : 'Liberar meus álbuns'}
+                  </button>
+                </div>
+              ) : libraryLoading ? (
+                <div className="flex h-20 items-center justify-center gap-2 text-[8px] text-slate-400"><Loader2 size={12} className="animate-spin text-[#1DB954]" />Carregando álbuns…</div>
+              ) : libraryAlbums.length > 0 ? (
+                <>
+                  <div className="grid max-h-48 grid-cols-2 gap-1.5 overflow-y-auto pr-0.5 [scrollbar-width:thin]">
+                    {libraryAlbums.map((album) => {
+                      const active = savedUrl === normalizeSpotifyContentUrl(album.url);
+                      return (
+                        <button key={album.id} type="button" onClick={() => selectLibraryAlbum(album)} disabled={!spotify.ready || Boolean(safetyReason)} className={`group flex min-w-0 items-center gap-2 rounded-lg p-1.5 text-left transition disabled:opacity-40 ${active ? 'bg-[#1DB954]/12 ring-1 ring-[#1DB954]/30' : 'bg-white hover:bg-slate-100 dark:bg-slate-900/55 dark:hover:bg-slate-800'}`} title={`Tocar ${album.name}`}>
+                          <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-200 dark:bg-slate-700">{album.image ? <img src={album.image} alt="" className="h-full w-full object-cover" loading="lazy" /> : <Disc3 size={15} className="text-slate-400" />}</span>
+                          <span className="min-w-0 flex-1">
+                            <span className={`block truncate text-[8px] font-bold ${active ? 'text-[#159447]' : 'text-slate-700 dark:text-slate-100'}`}>{album.name}</span>
+                            <span className="block truncate text-[7px] text-slate-400">{album.artist}{album.year ? ` · ${album.year}` : ''}</span>
+                          </span>
+                          {active ? <AudioLines size={10} className="shrink-0 text-[#1DB954]" /> : <Play size={9} className="shrink-0 text-slate-300 opacity-0 transition group-hover:opacity-100" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="mt-2 flex items-center justify-between">
+                    <button type="button" onClick={() => setLibraryOffset((value) => Math.max(0, value - SAVED_ALBUMS_PAGE_SIZE))} disabled={libraryOffset <= 0 || libraryLoading} className="flex h-6 items-center gap-1 rounded-md px-1.5 text-[7px] font-bold text-slate-400 hover:bg-slate-200 hover:text-slate-700 disabled:opacity-25 dark:hover:bg-slate-700 dark:hover:text-white"><ChevronLeft size={10} />Anterior</button>
+                    <span className="text-[7px] tabular-nums text-slate-400">{libraryOffset + 1}–{Math.min(libraryOffset + libraryAlbums.length, libraryTotal)} de {libraryTotal}</span>
+                    <button type="button" onClick={() => setLibraryOffset((value) => value + SAVED_ALBUMS_PAGE_SIZE)} disabled={libraryOffset + libraryAlbums.length >= libraryTotal || libraryLoading} className="flex h-6 items-center gap-1 rounded-md px-1.5 text-[7px] font-bold text-slate-400 hover:bg-slate-200 hover:text-slate-700 disabled:opacity-25 dark:hover:bg-slate-700 dark:hover:text-white">Próxima<ChevronRight size={10} /></button>
+                  </div>
+                </>
+              ) : (
+                <div className="py-5 text-center text-[8px] text-slate-400">Nenhum álbum salvo encontrado.</div>
+              )}
+              {libraryError ? <p className="mt-1.5 text-center text-[8px] font-medium text-red-500">{libraryError}</p> : null}
+            </div>
+          ) : null}
+        </div>
+
         <div className="mt-2 overflow-hidden rounded-xl bg-[#171717] p-2.5 text-white shadow-inner" data-spotify-mini-browser>
           <div className="flex gap-2.5">
             <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-[#282828]">
@@ -761,7 +909,7 @@ const SpotifyPremiumPlayer = ({ userId, profile }) => {
 
 const SpotifyGlobalPlayer = ({ userId }) => {
   const auth = useSyncExternalStore(subscribeSpotifyAuth, getSpotifyAuthSnapshot, getSpotifyAuthSnapshot);
-  return auth.connected ? <SpotifyPremiumPlayer userId={userId} profile={auth.profile} /> : <SpotifyPreviewPlayer userId={userId} />;
+  return auth.connected ? <SpotifyPremiumPlayer userId={userId} profile={auth.profile} authorizedScopes={auth.scopes} /> : <SpotifyPreviewPlayer userId={userId} />;
 };
 
 export default SpotifyGlobalPlayer;

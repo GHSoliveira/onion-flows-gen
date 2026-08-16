@@ -8,6 +8,7 @@ const SPOTIFY_SCOPES = [
   'user-read-playback-state',
   'user-read-currently-playing',
   'user-modify-playback-state',
+  'user-library-read',
 ].join(' ');
 
 const TOKEN_KEY = 'onionSpotifyOAuth';
@@ -56,6 +57,7 @@ let snapshot = (() => {
     connected: Boolean(token),
     profile: token?.profile || null,
     expiresAt: Number(token?.expiresAt || 0),
+    scopes: String(token?.scopes || ''),
   };
 })();
 
@@ -65,6 +67,7 @@ const publish = () => {
     connected: Boolean(token),
     profile: token?.profile || null,
     expiresAt: Number(token?.expiresAt || 0),
+    scopes: String(token?.scopes || ''),
   };
   listeners.forEach((listener) => listener());
 };
@@ -194,6 +197,7 @@ const completeSpotifyAuthorizationOnce = async (search) => {
     accessToken: token.access_token,
     refreshToken: token.refresh_token,
     expiresAt: Date.now() + (Math.max(60, Number(token.expires_in) || 3600) * 1000),
+    scopes: String(token.scope || SPOTIFY_SCOPES),
     profile,
   });
   localStorage.removeItem(TRANSACTION_KEY);
@@ -227,6 +231,7 @@ const refreshSpotifyAccessToken = async () => {
       accessToken: token.access_token,
       refreshToken: token.refresh_token || current.refreshToken,
       expiresAt: Date.now() + (Math.max(60, Number(token.expires_in) || 3600) * 1000),
+      scopes: String(token.scope || current.scopes || ''),
     };
     writeJson(TOKEN_KEY, next);
     publish();
