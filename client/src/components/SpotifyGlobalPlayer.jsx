@@ -254,13 +254,20 @@ const SpotifyGlobalPlayer = ({ userId }) => {
     pausedBySafetyRef.current = false;
   };
 
-  const togglePlayback = () => {
+  const playPlayback = () => {
     if (!ready || safetyReason) return;
-    const nextPlaying = !playingRef.current;
-    sendBridgeCommand('toggle');
+    sendBridgeCommand('resume');
     pausedBySafetyRef.current = false;
-    playingRef.current = nextPlaying;
-    setPlaying(nextPlaying);
+    playingRef.current = true;
+    setPlaying(true);
+  };
+
+  const pausePlayback = () => {
+    if (!ready) return;
+    sendBridgeCommand('pause');
+    pausedBySafetyRef.current = false;
+    playingRef.current = false;
+    setPlaying(false);
   };
 
   const restartPlayback = () => {
@@ -361,16 +368,40 @@ const SpotifyGlobalPlayer = ({ userId }) => {
             <RotateCcw size={11} />
           </button>
         ) : null}
-        <button
-          type="button"
-          onClick={savedUrl ? togglePlayback : () => setOpen(true)}
-          disabled={Boolean(safetyReason) || (Boolean(savedUrl) && !ready)}
-          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-white shadow-sm transition ${safetyReason ? 'bg-amber-500' : 'bg-white text-black hover:scale-105'} disabled:cursor-default disabled:opacity-70`}
-          title={safetyReason ? `Spotify pausado por ${safetyReason}` : !savedUrl ? 'Configurar Spotify' : playing ? 'Pausar Spotify' : 'Reproduzir Spotify'}
-          aria-label={!savedUrl ? 'Configurar Spotify' : playing ? 'Pausar Spotify' : 'Reproduzir Spotify'}
-        >
-          {safetyReason ? <AudioLines size={13} /> : playing ? <Pause size={13} fill="currentColor" /> : <Play size={13} fill="currentColor" className="translate-x-px" />}
-        </button>
+        {savedUrl ? (
+          <>
+            <button
+              type="button"
+              onClick={playPlayback}
+              disabled={!ready || Boolean(safetyReason)}
+              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full shadow-sm transition ${playing && !safetyReason ? 'bg-[#1DB954] text-white' : 'bg-white text-black hover:scale-105'} disabled:cursor-default disabled:opacity-50`}
+              title={safetyReason ? `Spotify pausado por ${safetyReason}` : 'Reproduzir Spotify'}
+              aria-label="Reproduzir Spotify"
+            >
+              {safetyReason ? <AudioLines size={13} /> : <Play size={13} fill="currentColor" className="translate-x-px" />}
+            </button>
+            <button
+              type="button"
+              onClick={pausePlayback}
+              disabled={!ready}
+              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition ${!playing || safetyReason ? 'bg-white/5 text-white/45 hover:bg-white/10 hover:text-white' : 'bg-white text-black hover:scale-105'} disabled:cursor-default disabled:opacity-35`}
+              title="Pausar Spotify"
+              aria-label="Pausar Spotify"
+            >
+              <Pause size={12} fill="currentColor" />
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white text-black shadow-sm transition hover:scale-105"
+            title="Configurar Spotify"
+            aria-label="Configurar Spotify"
+          >
+            <Play size={13} fill="currentColor" className="translate-x-px" />
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setOpen((value) => !value)}
