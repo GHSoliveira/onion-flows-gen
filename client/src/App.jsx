@@ -10,7 +10,7 @@ import {
   LayoutDashboard, Workflow, Users, FileText, Database,
   CalendarClock, MessageSquare, Headset, LogOut, Bot,
   Activity, ScrollText, Moon, Sun, Bell, Menu, X, Building2, Box, PhoneCall, CreditCard, BarChart3,
-  Shield, BrainCircuit
+  Shield, BrainCircuit, Youtube
 } from 'lucide-react';
 import OnionBrandIcon from './components/OnionBrandIcon';
 import SpotifyGlobalPlayer from './components/SpotifyGlobalPlayer';
@@ -109,10 +109,15 @@ const AppContent = () => {
   const preferencesHydratedUserRef = useRef('');
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifications, setNotifications] = useState([]);
+  const [youtubePanelOpen, setYoutubePanelOpen] = useState(false);
   const notifRef = useRef(null);
   const lastQueueCountRef = useRef(0);
   const sidebarLeaveTimer = useRef(null);
   const isAgentWorkspace = normalizePathname(location.pathname) === '/agent';
+
+  useEffect(() => {
+    if (!isAgentWorkspace) setYoutubePanelOpen(false);
+  }, [isAgentWorkspace]);
 
   // Garante: fora do agente a sidebar nunca fica colapsada
   useEffect(() => {
@@ -605,6 +610,18 @@ const AppContent = () => {
 
           <div className="flex items-center gap-2 ml-auto">
             {isAgentWorkspace ? <SpotifyGlobalPlayer userId={user?.id} /> : null}
+            {isAgentWorkspace ? (
+              <button
+                type="button"
+                onClick={() => setYoutubePanelOpen((open) => !open)}
+                className={`${isAgentWorkspace ? 'p-1.5' : 'p-2.5'} rounded-full transition-colors ${youtubePanelOpen ? 'bg-red-50 text-red-600 dark:bg-red-950/35 dark:text-red-300' : 'text-slate-500 hover:bg-gray-100 hover:text-red-600 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-red-300'}`}
+                title={youtubePanelOpen ? 'Fechar player do YouTube' : 'Abrir player do YouTube'}
+                aria-label={youtubePanelOpen ? 'Fechar player do YouTube' : 'Abrir player do YouTube'}
+                aria-expanded={youtubePanelOpen}
+              >
+                <Youtube size={16} />
+              </button>
+            ) : null}
             {user.role === 'SUPER_ADMIN' && tenant?.id && tenant.id !== 'super_admin' && (
               <span className="px-2.5 py-1 rounded-full text-xs font-semibold border border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800/50 dark:bg-blue-900/30 dark:text-blue-300">
                 Tenant: {tenant.id}
@@ -684,7 +701,7 @@ const AppContent = () => {
               <Route path="/system-logs" element={<SystemLogs />} />
               <Route path="/flows" element={<FlowList />} />
               <Route path="/editor/:id" element={<FlowEditor />} />
-              <Route path="/agent" element={<AgentWorkspace />} />
+              <Route path="/agent" element={<AgentWorkspace youtubePanelOpen={youtubePanelOpen} onYoutubePanelOpenChange={setYoutubePanelOpen} />} />
               <Route path="/agent-dashboard" element={<AgentDashboard />} />
               <Route path="/agent-active" element={<Navigate to="/agent" replace />} />
               <Route path="/users" element={<AgentManager />} />

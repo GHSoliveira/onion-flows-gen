@@ -36,6 +36,7 @@ test('normaliza somente vídeo e playlist oficiais do YouTube', () => {
 test('YouTube ocupa a coluna mais à direita e pausa por segurança', () => {
   const player = read('client/src/components/YouTubeSidePanel.jsx');
   const workspace = read('client/src/pages/AgentWorkspace.jsx');
+  const app = read('client/src/App.jsx');
   const server = read('index.js');
 
   assert.match(workspace, /<\/main>[\s\S]*?<YouTubeSidePanel/);
@@ -47,7 +48,9 @@ test('YouTube ocupa a coluna mais à direita e pausa por segurança', () => {
   assert.match(workspace, /YOUTUBE_PANEL_MIN_WIDTH = 300/);
   assert.match(workspace, /YOUTUBE_PANEL_MAX_WIDTH = 720/);
   assert.match(player, /className="aspect-video w-full border-0"/);
-  assert.match(workspace, /aria-label=\{isYoutubePanelOpen \? 'Fechar player do YouTube' : 'Abrir player do YouTube'\}/);
+  assert.match(app, /aria-label=\{youtubePanelOpen \? 'Fechar player do YouTube' : 'Abrir player do YouTube'\}/);
+  assert.match(app, /<AgentWorkspace youtubePanelOpen=\{youtubePanelOpen\} onYoutubePanelOpenChange=\{setYoutubePanelOpen\}/);
+  assert.doesNotMatch(workspace, /onClick=\{\(\) => setIsYoutubePanelOpen/);
   assert.match(player, /subscribePlaybackSafety/);
   assert.match(player, /sendPlayerCommand\('pauseVideo'\)/);
   assert.match(player, /document\.addEventListener\('play', markPlaying, true\)/);

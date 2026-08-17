@@ -17,8 +17,7 @@ import {
   User, MessageCircle, Clock, Play, XCircle, Send, Headset, Star, Check, CheckCheck,
   ArrowLeft, Paperclip, Info, MessageSquareText, Loader2, FileText, Image as ImageIcon, Video, AudioLines,
   PanelRightClose, PanelRightOpen, ArrowRightLeft, CornerUpLeft, X as XIcon, Settings, Pencil, Trash2,
-  PhoneCall, Copy, RefreshCw, BrainCircuit, Database, ClipboardList, Router, Activity, TriangleAlert, ArrowUpDown,
-  Youtube
+  PhoneCall, Copy, RefreshCw, BrainCircuit, Database, ClipboardList, Router, Activity, TriangleAlert, ArrowUpDown
 } from 'lucide-react';
 import OnionAiIcon from '../components/OnionAiIcon';
 import SpotifyAccountSettings from '../components/SpotifyAccountSettings';
@@ -706,10 +705,11 @@ const mergeChatsPreserveOrder = (prevList, nextList, storedOrder = []) => {
   return [...newcomers, ...result];
 };
 
-const AgentWorkspace = () => {
+const AgentWorkspace = ({ youtubePanelOpen = false, onYoutubePanelOpenChange }) => {
   const { user, updateUser } = useAuth();
   const { confirm } = useDialog();
   const location = useLocation();
+  const isYoutubePanelOpen = youtubePanelOpen === true;
   const workspaceRef = useRef(null);
   const [waitingChats, setWaitingChats] = useState([]);
   const [myChats, setMyChats] = useState([]);
@@ -828,7 +828,6 @@ const AgentWorkspace = () => {
   const [mobilePanelTab, setMobilePanelTab] = useState('info');
   const [isSidePanelCollapsed, setIsSidePanelCollapsed] = useState(true);
   const [isAiPanelOpen, setIsAiPanelOpen] = useState(false);
-  const [isYoutubePanelOpen, setIsYoutubePanelOpen] = useState(false);
   const [youtubePanelWidth, setYoutubePanelWidth] = useState(() => readYoutubePanelWidth(user?.id));
   const [youtubePanelResizing, setYoutubePanelResizing] = useState(false);
   const youtubeResizeCleanupRef = useRef(null);
@@ -5744,16 +5743,6 @@ const AgentWorkspace = () => {
                       ) : null}
                       <button
                         type="button"
-                        onClick={() => setIsYoutubePanelOpen((open) => !open)}
-                        className={`${HEADER_ICON_BUTTON_CLASS} ${isYoutubePanelOpen ? 'text-red-600 dark:text-red-300' : 'text-slate-500 hover:text-red-600 dark:text-slate-300 dark:hover:text-red-300'}`}
-                        title={isYoutubePanelOpen ? 'Fechar player do YouTube' : 'Abrir player do YouTube'}
-                        aria-label={isYoutubePanelOpen ? 'Fechar player do YouTube' : 'Abrir player do YouTube'}
-                        aria-expanded={isYoutubePanelOpen}
-                      >
-                        <Youtube size={16} />
-                      </button>
-                      <button
-                        type="button"
                         onClick={openTransferModal}
                         className={`${HEADER_ICON_BUTTON_CLASS} text-blue-600 hover:text-blue-700 dark:text-blue-300`}
                         title="Transferir atendimento"
@@ -6298,14 +6287,14 @@ const AgentWorkspace = () => {
             <span className={`absolute left-1/2 top-1/2 h-12 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full transition-colors ${youtubePanelResizing ? 'bg-red-500' : 'bg-slate-300 group-hover:bg-red-400 group-focus:bg-red-400 dark:bg-slate-700'}`} />
           </div>
           <aside className="h-full w-full min-w-[300px] border-l border-red-100 bg-white dark:border-red-950/60 dark:bg-slate-900">
-            <YouTubeSidePanel userId={user?.id} open={isYoutubePanelOpen} onClose={() => setIsYoutubePanelOpen(false)} />
+            <YouTubeSidePanel userId={user?.id} open={isYoutubePanelOpen} onClose={() => onYoutubePanelOpenChange?.(false)} />
           </aside>
         </div>
       ) : null}
       {isMobileView && isYoutubePanelOpen ? (
-        <div className="ui-overlay-fade fixed inset-0 z-[80] bg-slate-950/60" onClick={() => setIsYoutubePanelOpen(false)}>
+        <div className="ui-overlay-fade fixed inset-0 z-[80] bg-slate-950/60" onClick={() => onYoutubePanelOpenChange?.(false)}>
           <div className="ui-sheet-surface absolute inset-x-0 bottom-0 h-[82vh] overflow-hidden rounded-t-[28px] bg-white shadow-2xl dark:bg-slate-900" onClick={(event) => event.stopPropagation()}>
-            <YouTubeSidePanel userId={user?.id} open={isYoutubePanelOpen} onClose={() => setIsYoutubePanelOpen(false)} />
+            <YouTubeSidePanel userId={user?.id} open={isYoutubePanelOpen} onClose={() => onYoutubePanelOpenChange?.(false)} />
           </div>
         </div>
       ) : null}
