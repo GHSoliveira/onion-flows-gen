@@ -39,7 +39,14 @@ test('YouTube ocupa a coluna mais à direita e pausa por segurança', () => {
   const server = read('index.js');
 
   assert.match(workspace, /<\/main>[\s\S]*?<YouTubeSidePanel/);
-  assert.match(workspace, /isYoutubePanelOpen \? 'w-\[300px\] opacity-100 xl:w-\[340px\]'/);
+  assert.match(workspace, /style=\{\{ width: isYoutubePanelOpen \? `\$\{youtubePanelWidth\}px` : '0px' \}\}/);
+  assert.match(workspace, /aria-label="Redimensionar painel do YouTube"/);
+  assert.match(workspace, /onPointerDown=\{beginYoutubePanelResize\}/);
+  assert.match(workspace, /startWidth \+ \(startX - moveEvent\.clientX\)/);
+  assert.match(workspace, /onionYoutubePanelWidth:/);
+  assert.match(workspace, /YOUTUBE_PANEL_MIN_WIDTH = 300/);
+  assert.match(workspace, /YOUTUBE_PANEL_MAX_WIDTH = 720/);
+  assert.match(player, /className="aspect-video w-full border-0"/);
   assert.match(workspace, /aria-label=\{isYoutubePanelOpen \? 'Fechar player do YouTube' : 'Abrir player do YouTube'\}/);
   assert.match(player, /subscribePlaybackSafety/);
   assert.match(player, /sendPlayerCommand\('pauseVideo'\)/);

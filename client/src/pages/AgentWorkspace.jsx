@@ -40,6 +40,30 @@ const CHAT_SORT_OPTIONS = Object.freeze([
   { value: 'agent_wait', label: 'Sem resposta do agente' },
   { value: 'interaction', label: 'Sem interacao' },
 ]);
+const YOUTUBE_PANEL_MIN_WIDTH = 300;
+const YOUTUBE_PANEL_MAX_WIDTH = 720;
+const YOUTUBE_PANEL_DEFAULT_WIDTH = 340;
+const youtubePanelWidthStorageKey = (userId) => `onionYoutubePanelWidth:${userId || 'anon'}`;
+const normalizeYoutubePanelWidth = (value, maximum = YOUTUBE_PANEL_MAX_WIDTH) => {
+  const rawValue = String(value ?? '').trim();
+  const parsed = rawValue ? Number(rawValue) : Number.NaN;
+  const safeMaximum = Math.max(YOUTUBE_PANEL_MIN_WIDTH, Math.min(YOUTUBE_PANEL_MAX_WIDTH, Number(maximum) || YOUTUBE_PANEL_MAX_WIDTH));
+  return Math.min(safeMaximum, Math.max(YOUTUBE_PANEL_MIN_WIDTH, Number.isFinite(parsed) ? parsed : YOUTUBE_PANEL_DEFAULT_WIDTH));
+};
+const readYoutubePanelWidth = (userId) => {
+  try {
+    return normalizeYoutubePanelWidth(localStorage.getItem(youtubePanelWidthStorageKey(userId)));
+  } catch {
+    return YOUTUBE_PANEL_DEFAULT_WIDTH;
+  }
+};
+const saveYoutubePanelWidth = (userId, width) => {
+  try {
+    localStorage.setItem(youtubePanelWidthStorageKey(userId), String(Math.round(width)));
+  } catch {
+    // Preferência visual opcional; falha de storage não bloqueia o player.
+  }
+};
 const readChatSort = (userId) => {
   try {
     const saved = JSON.parse(localStorage.getItem(chatSortStorageKey(userId)) || 'null');
@@ -686,6 +710,7 @@ const AgentWorkspace = () => {
   const { user, updateUser } = useAuth();
   const { confirm } = useDialog();
   const location = useLocation();
+  const workspaceRef = useRef(null);
   const [waitingChats, setWaitingChats] = useState([]);
   const [myChats, setMyChats] = useState([]);
   /** Genesys voice: cards sem mensagens (não listados no inbox de chat) */
@@ -804,6 +829,9 @@ const AgentWorkspace = () => {
   const [isSidePanelCollapsed, setIsSidePanelCollapsed] = useState(true);
   const [isAiPanelOpen, setIsAiPanelOpen] = useState(false);
   const [isYoutubePanelOpen, setIsYoutubePanelOpen] = useState(false);
+  const [youtubePanelWidth, setYoutubePanelWidth] = useState(() => readYoutubePanelWidth(user?.id));
+  const [youtubePanelResizing, setYoutubePanelResizing] = useState(false);
+  const youtubeResizeCleanupRef = useRef(null);
   const [aiSuggestion, setAiSuggestion] = useState(null);
   const [aiSuggestedReply, setAiSuggestedReply] = useState('');
   const [aiAgentGuidance, setAiAgentGuidance] = useState('');
@@ -906,6 +934,81 @@ const AgentWorkspace = () => {
   const chatDetailsCacheRef = useRef(new Map());
   const chatDetailsInFlightRef = useRef(new Map());
   const automaticHydrateAtRef = useRef(new Map());
+
+  const getYoutubePanelMaximumWidth = useCallback(() => {
+    const workspaceWidth = Number(workspaceRef.current?.clientWidth || window.innerWidth || 0);
+    // Reserva a lista de clientes e uma faixa utilizável para a conversa.
+    return Math.max(YOUTUBE_PANEL_MIN_WIDTH, Math.min(YOUTUBE_PANEL_MAX_WIDTH, workspaceWidth - 720));
+  }, []);
+
+  const commitYoutubePanelWidth = useCallback((value) => {
+    const nextWidth = normalizeYoutubePanelWidth(value, getYoutubePanelMaximumWidth());
+    setYoutubePanelWidth(nextWidth);
+    saveYoutubePanelWidth(user?.id, nextWidth);
+    return nextWidth;
+  }, [getYoutubePanelMaximumWidth, user?.id]);
+
+  const beginYoutubePanelResize = useCallback((event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    youtubeResizeCleanupRef.current?.();
+
+    const startX = event.clientX;
+    const startWidth = youtubePanelWidth;
+    let latestWidth = startWidth;
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    setYoutubePanelResizing(true);
+
+    const handlePointerMove = (moveEvent) => {
+      latestWidth = normalizeYoutubePanelWidth(
+        startWidth + (startX - moveEvent.clientX),
+        getYoutubePanelMaximumWidth(),
+      );
+      setYoutubePanelWidth(latestWidth);
+    };
+
+    const finishResize = () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', finishResize);
+      window.removeEventListener('pointercancel', finishResize);
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      setYoutubePanelResizing(false);
+      saveYoutubePanelWidth(user?.id, latestWidth);
+      youtubeResizeCleanupRef.current = null;
+    };
+
+    youtubeResizeCleanupRef.current = finishResize;
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', finishResize, { once: true });
+    window.addEventListener('pointercancel', finishResize, { once: true });
+  }, [getYoutubePanelMaximumWidth, user?.id, youtubePanelWidth]);
+
+  const handleYoutubeResizeKeyDown = useCallback((event) => {
+    if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+    event.preventDefault();
+    commitYoutubePanelWidth(youtubePanelWidth + (event.key === 'ArrowLeft' ? 24 : -24));
+  }, [commitYoutubePanelWidth, youtubePanelWidth]);
+
+  useEffect(() => {
+    setYoutubePanelWidth(readYoutubePanelWidth(user?.id));
+  }, [user?.id]);
+
+  useEffect(() => {
+    const clampToViewport = () => setYoutubePanelWidth((current) => {
+      const nextWidth = normalizeYoutubePanelWidth(current, getYoutubePanelMaximumWidth());
+      if (nextWidth !== current) saveYoutubePanelWidth(user?.id, nextWidth);
+      return nextWidth;
+    });
+    clampToViewport();
+    window.addEventListener('resize', clampToViewport);
+    return () => window.removeEventListener('resize', clampToViewport);
+  }, [getYoutubePanelMaximumWidth, user?.id]);
+
+  useEffect(() => () => youtubeResizeCleanupRef.current?.(), []);
 
   useEffect(() => {
     aiRequestRef.current += 1;
@@ -5112,6 +5215,7 @@ const AgentWorkspace = () => {
 
   return (
     <div
+      ref={workspaceRef}
       className={`agent-workspace relative flex h-full w-full min-h-0 overflow-hidden bg-slate-100 dark:bg-slate-950 ${performanceMode ? 'ui-performance-mode' : ''}`}
       data-chat-background-mode={chatAppearance.backgroundMode}
       data-chat-bubble-theme={chatAppearance.customBubbles ? 'custom' : 'default'}
@@ -6174,8 +6278,26 @@ const AgentWorkspace = () => {
       </main>
       ) : null}
       {!isMobileView ? (
-        <div className={`hidden shrink-0 overflow-hidden transition-[width,opacity] duration-300 ease-out lg:block ${isYoutubePanelOpen ? 'w-[300px] opacity-100 xl:w-[340px]' : 'w-0 opacity-0'}`}>
-          <aside className="h-full w-[300px] border-l border-red-100 bg-white dark:border-red-950/60 dark:bg-slate-900 xl:w-[340px]">
+        <div
+          className={`relative hidden shrink-0 overflow-hidden ease-out lg:block ${youtubePanelResizing ? '' : 'transition-[width,opacity] duration-300'} ${isYoutubePanelOpen ? 'opacity-100' : 'opacity-0'}`}
+          style={{ width: isYoutubePanelOpen ? `${youtubePanelWidth}px` : '0px' }}
+        >
+          <div
+            role="separator"
+            tabIndex={0}
+            aria-label="Redimensionar painel do YouTube"
+            aria-orientation="vertical"
+            aria-valuemin={YOUTUBE_PANEL_MIN_WIDTH}
+            aria-valuemax={getYoutubePanelMaximumWidth()}
+            aria-valuenow={Math.round(youtubePanelWidth)}
+            onPointerDown={beginYoutubePanelResize}
+            onKeyDown={handleYoutubeResizeKeyDown}
+            className={`group absolute inset-y-0 left-0 z-30 w-2 cursor-col-resize touch-none outline-none ${youtubePanelResizing ? 'bg-red-500/15' : 'hover:bg-red-500/10 focus:bg-red-500/10'}`}
+            title="Arraste para redimensionar"
+          >
+            <span className={`absolute left-1/2 top-1/2 h-12 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full transition-colors ${youtubePanelResizing ? 'bg-red-500' : 'bg-slate-300 group-hover:bg-red-400 group-focus:bg-red-400 dark:bg-slate-700'}`} />
+          </div>
+          <aside className="h-full w-full min-w-[300px] border-l border-red-100 bg-white dark:border-red-950/60 dark:bg-slate-900">
             <YouTubeSidePanel userId={user?.id} open={isYoutubePanelOpen} onClose={() => setIsYoutubePanelOpen(false)} />
           </aside>
         </div>
