@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { AudioLines, ChevronDown, ChevronLeft, ChevronRight, Disc3, ExternalLink, Library, Loader2, Music2, Pause, Play, Save, SkipBack, SkipForward, Trash2, Volume2, VolumeX } from 'lucide-react';
+import { AudioLines, ChevronDown, ChevronLeft, ChevronRight, Disc3, ExternalLink, Library, Loader2, Music2, Pause, Play, Save, Search, SkipBack, SkipForward, Trash2, Volume2, VolumeX, X } from 'lucide-react';
 import {
   getPlaybackSafetySnapshot,
   subscribePlaybackSafety,
@@ -14,7 +14,9 @@ const SPOTIFY_BRIDGE_COMMAND = 'onion:spotify:bridge:command';
 const SPOTIFY_BRIDGE_EVENT = 'onion:spotify:bridge:event';
 const spotifyMetadataCache = new Map();
 const spotifyAlbumTracksCache = new Map();
+const spotifyAlbumSearchCache = new Map();
 const SAVED_ALBUMS_PAGE_SIZE = 12;
+const ALBUM_SEARCH_LIMIT = 8;
 
 const SpotifyGlyph = ({ size = 17, className = '' }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true" className={className}>
@@ -103,6 +105,34 @@ const loadSpotifySavedAlbums = async (cache, offset = 0) => {
       throw error;
     });
   cache.set(cacheKey, request);
+  return request;
+};
+
+const mapSpotifyAlbum = (album) => ({
+  id: String(album.id),
+  uri: String(album.uri || `spotify:album:${album.id}`),
+  url: String(album?.external_urls?.spotify || `https://open.spotify.com/album/${album.id}`),
+  name: String(album.name || 'Álbum'),
+  artist: Array.isArray(album.artists) ? album.artists.map((artist) => artist?.name).filter(Boolean).join(', ') : '',
+  image: String(album?.images?.[1]?.url || album?.images?.[0]?.url || ''),
+  year: String(album?.release_date || '').slice(0, 4),
+});
+
+const searchSpotifyAlbums = async (query) => {
+  const normalizedQuery = String(query || '').trim().replace(/\s+/g, ' ');
+  if (normalizedQuery.length < 2) return [];
+  const cacheKey = normalizedQuery.toLocaleLowerCase('pt-BR');
+  if (spotifyAlbumSearchCache.has(cacheKey)) return spotifyAlbumSearchCache.get(cacheKey);
+  const request = spotifyApiRequest(`/search?type=album&limit=${ALBUM_SEARCH_LIMIT}&q=${encodeURIComponent(normalizedQuery)}`)
+    .then((response) => response.json())
+    .then((payload) => (Array.isArray(payload?.albums?.items) ? payload.albums.items : [])
+      .filter((album) => album?.id)
+      .map(mapSpotifyAlbum))
+    .catch((error) => {
+      spotifyAlbumSearchCache.delete(cacheKey);
+      throw error;
+    });
+  spotifyAlbumSearchCache.set(cacheKey, request);
   return request;
 };
 
@@ -375,6 +405,7 @@ const SpotifyPremiumPlayer = ({ userId, profile, authorizedScopes = '' }) => {
   const pausedBySafetyRef = useRef(false);
   const pendingAlbumPlaybackRef = useRef(false);
   const libraryPageCacheRef = useRef(new Map());
+  const albumSearchRequestRef = useRef(0);
   const [open, setOpen] = useState(false);
   const [savedUrl, setSavedUrl] = useState(() => readSavedUrl(userId));
   const [draftUrl, setDraftUrl] = useState(() => readSavedUrl(userId));
@@ -389,6 +420,10 @@ const SpotifyPremiumPlayer = ({ userId, profile, authorizedScopes = '' }) => {
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [libraryError, setLibraryError] = useState('');
   const [libraryAuthBusy, setLibraryAuthBusy] = useState(false);
+  const [albumSearchQuery, setAlbumSearchQuery] = useState('');
+  const [albumSearchResults, setAlbumSearchResults] = useState([]);
+  const [albumSearchLoading, setAlbumSearchLoading] = useState(false);
+  const [albumSearchError, setAlbumSearchError] = useState('');
   const libraryScopeGranted = String(authorizedScopes).split(/\s+/).includes('user-library-read');
   const accountProduct = String(profile?.product || '').toLowerCase();
   const accountNeedsPremium = Boolean(accountProduct && accountProduct !== 'premium');
@@ -453,6 +488,40 @@ const SpotifyPremiumPlayer = ({ userId, profile, authorizedScopes = '' }) => {
       });
     return () => { disposed = true; };
   }, [libraryOffset, libraryOpen, libraryScopeGranted]);
+
+  useEffect(() => {
+    const query = albumSearchQuery.trim().replace(/\s+/g, ' ');
+    const requestId = albumSearchRequestRef.current + 1;
+    albumSearchRequestRef.current = requestId;
+    if (query.length < 2) {
+      setAlbumSearchResults([]);
+      setAlbumSearchLoading(false);
+      setAlbumSearchError('');
+      return undefined;
+    }
+    setAlbumSearchLoading(true);
+    setAlbumSearchError('');
+    const timer = window.setTimeout(() => {
+      searchSpotifyAlbums(query)
+        .then((albums) => {
+          if (albumSearchRequestRef.current !== requestId) return;
+          setAlbumSearchResults(albums);
+          setAlbumSearchError(albums.length ? '' : 'Nenhum álbum encontrado.');
+        })
+        .catch((error) => {
+          if (albumSearchRequestRef.current !== requestId) return;
+          const message = String(error?.message || '');
+          setAlbumSearchResults([]);
+          setAlbumSearchError(message.includes('spotify_rate_limit')
+            ? 'O Spotify pediu uma pausa. Tente novamente em instantes.'
+            : 'Não foi possível pesquisar álbuns agora.');
+        })
+        .finally(() => {
+          if (albumSearchRequestRef.current === requestId) setAlbumSearchLoading(false);
+        });
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [albumSearchQuery]);
 
   useEffect(() => {
     if (!pendingAlbumPlaybackRef.current || !spotify.ready) return;
@@ -617,6 +686,39 @@ const SpotifyPremiumPlayer = ({ userId, profile, authorizedScopes = '' }) => {
         </div>
 
         <SpotifyAccountSettings compact />
+
+        <div className="relative mt-2" data-spotify-album-search>
+          <Search size={12} className="pointer-events-none absolute left-2.5 top-2.5 text-slate-400" />
+          <input
+            type="search"
+            value={albumSearchQuery}
+            onChange={(event) => setAlbumSearchQuery(event.target.value)}
+            placeholder="Pesquisar álbuns no Spotify"
+            aria-label="Pesquisar álbuns no Spotify"
+            autoComplete="off"
+            className="h-8 w-full rounded-xl border border-slate-200 bg-slate-50 pl-8 pr-8 text-[9px] text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-[#1DB954] focus:ring-2 focus:ring-[#1DB954]/10 dark:border-slate-700 dark:bg-slate-800/70 dark:text-slate-100"
+          />
+          {albumSearchLoading ? <Loader2 size={12} className="absolute right-2.5 top-2.5 animate-spin text-[#1DB954]" /> : null}
+          {!albumSearchLoading && albumSearchQuery ? (
+            <button type="button" onClick={() => setAlbumSearchQuery('')} className="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full text-slate-400 transition hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-slate-700 dark:hover:text-white" title="Limpar pesquisa" aria-label="Limpar pesquisa de álbuns"><X size={10} /></button>
+          ) : null}
+          {albumSearchQuery.trim().length >= 2 ? (
+            <div className="absolute left-0 right-0 top-9 z-20 max-h-52 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-[0_16px_40px_rgba(15,23,42,0.24)] [scrollbar-width:thin] dark:border-slate-700 dark:bg-slate-900">
+              {albumSearchResults.map((album) => {
+                const active = savedUrl === normalizeSpotifyContentUrl(album.url);
+                return (
+                  <button key={album.id} type="button" onClick={() => { selectLibraryAlbum(album); setAlbumSearchQuery(''); }} disabled={!spotify.ready || Boolean(safetyReason)} className={`group flex w-full min-w-0 items-center gap-2 rounded-lg p-1.5 text-left transition disabled:opacity-40 ${active ? 'bg-[#1DB954]/12' : 'hover:bg-slate-100 dark:hover:bg-slate-800'}`} title={`Tocar ${album.name}`}>
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-200 dark:bg-slate-700">{album.image ? <img src={album.image} alt="" className="h-full w-full object-cover" loading="lazy" /> : <Disc3 size={15} className="text-slate-400" />}</span>
+                    <span className="min-w-0 flex-1"><span className={`block truncate text-[9px] font-bold ${active ? 'text-[#159447]' : 'text-slate-700 dark:text-slate-100'}`}>{album.name}</span><span className="block truncate text-[8px] text-slate-400">{album.artist}{album.year ? ` · ${album.year}` : ''}</span></span>
+                    {active ? <AudioLines size={10} className="shrink-0 text-[#1DB954]" /> : <Play size={9} className="shrink-0 text-slate-300 opacity-0 transition group-hover:opacity-100" />}
+                  </button>
+                );
+              })}
+              {!albumSearchLoading && albumSearchError ? <div className="px-2 py-4 text-center text-[8px] text-slate-400">{albumSearchError}</div> : null}
+              {albumSearchLoading && albumSearchResults.length === 0 ? <div className="flex items-center justify-center gap-2 px-2 py-4 text-[8px] text-slate-400"><Loader2 size={11} className="animate-spin text-[#1DB954]" />Pesquisando…</div> : null}
+            </div>
+          ) : null}
+        </div>
 
         <div className="mt-2 overflow-hidden rounded-xl border border-slate-200 bg-slate-50/80 dark:border-slate-700 dark:bg-slate-800/55" data-spotify-library>
           <button type="button" onClick={() => setLibraryOpen((value) => !value)} className="flex w-full items-center gap-2 px-2.5 py-2 text-left transition hover:bg-slate-100 dark:hover:bg-slate-800" aria-expanded={libraryOpen}>
